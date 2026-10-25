@@ -45,6 +45,19 @@ def _mode() -> str:
         return "light"
 
 
+# Voltage, current and temperature each keep one colour everywhere they are
+# plotted alone. Drawn from palette slots not used for run identity (blue,
+# orange, aqua), so a metric is never mistaken for a run.
+_METRIC = {
+    "light": {"voltage": "#6250d6", "current": "#eda100", "temperature": "#e34948"},
+    "dark": {"voltage": "#9085e9", "current": "#c98500", "temperature": "#e66767"},
+}
+
+
+def metric_colors() -> dict[str, str]:
+    return _METRIC[_mode()]
+
+
 def categorical(n: int = 3) -> list[str]:
     return _CATEGORICAL[_mode()][:n]
 
