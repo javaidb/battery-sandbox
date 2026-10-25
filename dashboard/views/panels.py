@@ -51,11 +51,11 @@ def render(cell, prefixes: tuple[str, ...]):
         if isinstance(item, str):
             st.markdown(item)
         elif isinstance(item, pd.DataFrame):
-            st.dataframe(item, use_container_width=True)
+            st.dataframe(item, width="stretch")
         elif isinstance(item, dict):
             st.json(item)
         elif type(item).__module__.startswith("plotly"):
-            st.plotly_chart(item, use_container_width=True)
+            st.plotly_chart(item, width="stretch")
         elif type(item).__module__.startswith("matplotlib"):
             st.pyplot(item)
         else:
