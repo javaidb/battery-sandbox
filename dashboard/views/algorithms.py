@@ -16,7 +16,7 @@ from plotly.subplots import make_subplots
 
 from batterylab import bench
 from batterylab.echem import CHEMISTRIES
-from common import MUTED, band_fill, categorical, run_plant, scenario_key, style, thin
+from common import MUTED, band_fill, categorical, run_plant, scenario_key, style, tabs, thin
 from views import panels
 from workbench import ECMS, ESTIMATORS, discover
 
@@ -231,16 +231,16 @@ def page():
     measured = bench.measure(plant, sens)
     st.caption(f"Plant: {scen.chemistry} · {scen.profile} · {scen.temperature_c:g} °C · {scen.model}. "
                "Your estimators see only the measured signals and a fresh-cell datasheet.")
-    tabs = st.tabs(["Plant & sensors", "SoC estimation", "Robustness", "ECM check", "Your panels (workbench)"])
-    with tabs[0]:
+    sections = tabs(["Plant & sensors", "SoC estimation", "Robustness", "ECM check", "Your panels (workbench)"])
+    with sections[0]:
         _plant_tab(plant, measured)
-    with tabs[1]:
+    with sections[1]:
         _soc_tab(plant, scen, sens)
-    with tabs[2]:
+    with sections[2]:
         _robustness_tab(scen, sens)
-    with tabs[3]:
+    with sections[3]:
         _ecm_tab(plant)
-    with tabs[4]:
+    with sections[4]:
         tr = plant.truth
         cell = bl.CellData(pd.DataFrame({"test_time_s": tr["time_s"], "cycle_index": 0, "current_a": measured["current_a"],
                                          "voltage_v": measured["voltage_v"], "temperature_c": measured["temperature_c"]}),
