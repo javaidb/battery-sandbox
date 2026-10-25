@@ -14,7 +14,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from batterylab.echem import CHEMISTRIES, FIELDS, SERIES_GROUPS, TESTS
-from common import CRITICAL, MUTED, categorical, metric_colors, ocp_curves, run_to_celldata, simulate, style
+from common import CRITICAL, MUTED, band_fill, categorical, metric_colors, ocp_curves, run_to_celldata, simulate, style
 from glossary import LOSS_KEYS, card, cards
 from views import measured, panels
 
@@ -110,16 +110,24 @@ def _kpis(run):
     dt = np.diff(s.index.to_numpy(), prepend=s.index[0])
     e_wh = float(np.sum(v * i * dt) / 3600)
     q = s["Discharge capacity [Ah]"]
-    anode = s["Anode potential at separator vs Li [V]"]
-    c = st.columns(5)
-    c[0].metric("Capacity moved", f"{abs(q.iloc[-1] - q.iloc[0]):.3f} Ah", help=f"Nominal {run.meta['nominal_capacity_ah']:g} Ah")
-    c[1].metric("Energy", f"{abs(e_wh):.2f} Wh", help="Positive = delivered on discharge or absorbed on charge")
-    c[2].metric("Voltage range", f"{v.min():.2f}–{v.max():.2f} V", help=f"Cut-offs {run.meta['v_min']:g}–{run.meta['v_max']:g} V")
-    c[3].metric("Peak temperature rise", f"{s['Cell temperature [°C]'].max() - run.config['temperature_c']:.1f} K")
-    c[4].metric(
-        "Min anode potential vs Li", f"{anode.min() * 1000:.0f} mV",
-        delta="plating possible" if anode.min() < 0 else "no plating risk", delta_color="inverse" if anode.min() < 0 else "off",
-        help="Solid–electrolyte potential difference at the anode/separator interface. Below 0 V, lithium can plate instead of intercalating.",
+    anode = s["Anode potential at separator vs Li [V]"].min()
+    items = [
+        ("Capacity moved", f"{abs(q.iloc[-1] - q.iloc[0]):.3f} Ah", f"Nominal {run.meta['nominal_capacity_ah']:g} Ah"),
+        ("Energy", f"{abs(e_wh):.2f} Wh", "Delivered on discharge, absorbed on charge"),
+        ("Voltage range", f"{v.min():.2f}–{v.max():.2f} V", f"Cut-offs {run.meta['v_min']:g}–{run.meta['v_max']:g} V"),
+        ("Peak temp. rise", f"{s['Cell temperature [°C]'].max() - run.config['temperature_c']:.1f} K", "Above ambient"),
+        ("Min anode vs Li", f"{anode * 1000:.0f} mV",
+         ("Plating possible" if anode < 0 else "No plating risk") + " (anode/separator interface; below 0 V lithium can plate)"),
+    ]
+    cells = []
+    for label, value, tip in items:
+        warn = f" style='color:{CRITICAL}'" if label.startswith("Min anode") and anode < 0 else ""
+        cells.append(f"<div title='{tip}'><div class='kpi-l'>{label}</div><div class='kpi-v'{warn}>{value}</div></div>")
+    # A compact two-column grid: st.metric truncates in a narrow side panel.
+    st.html(
+        "<style>.kpis{display:grid;grid-template-columns:1fr 1fr;gap:.5rem .75rem;margin:.25rem 0 .5rem}"
+        ".kpi-l{font-size:.75rem;opacity:.65}.kpi-v{font-size:1.05rem;font-weight:600;white-space:nowrap}</style>"
+        f"<div class='kpis'>{''.join(cells)}</div>"
     )
 
 
@@ -152,36 +160,120 @@ RESPONSE = [("Voltage [V]", "voltage", "Voltage (V)"), ("Current [A]", "current"
 RUN_DASH = ["solid", "dash", "dot"]
 
 
-def _response(runs, xmode, compact: bool = False):
-    """Voltage, current and temperature. Each metric has its own colour; runs are told apart by line style."""
+def _mini_response(runs, xmode, cursor: bool):
+    """Voltage, current and temperature in the side panel.
+
+    Each metric has its own colour; runs are told apart by line style. With
+    ``cursor``, a vertical line per run marks the frame an animated view is
+    showing; ``_CURSOR_SYNC`` moves it in the browser as the animation plays.
+    """
     colors = metric_colors()
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.09 if compact else 0.05,
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.09,
                         subplot_titles=[title for *_, title in RESPONSE])
+    cursor_x = []
     for run, dash in zip(runs, RUN_DASH):
         x, xlabel = _x_axis(run, xmode)
         for r, (col, kind, _) in enumerate(RESPONSE, start=1):
-            fig.add_trace(go.Scatter(x=x, y=run.series[col], mode="lines", line=dict(width=2 if compact else 2.5, color=colors[kind], dash=dash),
+            fig.add_trace(go.Scatter(x=x, y=run.series[col], mode="lines", line=dict(width=2, color=colors[kind], dash=dash),
                                      name=run.label, legendgroup=run.label, showlegend=False), row=r, col=1)
+        cursor_x.append([float(x[k]) for k in _frame_idx(run)])
     if len(runs) > 1:  # legend entries for line style only, in neutral ink
         for run, dash in zip(runs, RUN_DASH):
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", line=dict(width=2, color=MUTED, dash=dash), name=run.label))
+    if cursor:
+        for xs, dash in zip(cursor_x, RUN_DASH):
+            fig.add_shape(type="line", xref="x", yref="paper", x0=xs[0], x1=xs[0], y0=0, y1=1,
+                          line=dict(color=MUTED, width=1.5, dash=dash))
+        fig.update_layout(meta={"cursor": cursor_x})
     fig.update_xaxes(title_text=xlabel, row=3, col=1)
-    fig.update_layout(hovermode="x unified")
-    if compact:
-        fig.update_annotations(font_size=12)
-        fig.update_layout(legend=dict(font_size=10))
-    st.plotly_chart(style(fig, 520 if compact else 620), use_container_width=True, key=f"response_{compact}")
-    if not compact:
-        cards([col for col, *_ in RESPONSE], cols=3, colors=[colors[kind] for _, kind, _ in RESPONSE])
+    fig.update_layout(hovermode="x unified", legend=dict(font_size=10))
+    fig.update_annotations(font_size=12)
+    with st.container(border=True):
+        st.caption("Cell response" + (" · grey line = animation frame" if cursor else ""))
+        st.plotly_chart(style(fig, 430), use_container_width=True, key="mini_response")
+        with st.expander("What these show"):
+            for col, kind, _ in RESPONSE:
+                card(col, colors[kind])
 
 
-def _mini_response(runs, xmode):
-    # Sticky, so it stays in view while you scroll a tall figure beside it.
-    # The column is the element that sticks: it sits in a row as tall as the main figure.
-    st.html("<style>[data-testid='stColumn']:has(.st-key-mini_response){position:sticky;top:4rem;align-self:flex-start;z-index:5}</style>")
-    with st.container(border=True, key="mini_response"):
-        st.caption("Cell response")
-        _response(runs, xmode, compact=True)
+# Moves the mini panel's cursor to follow whichever animated figure is playing
+# or being scrubbed. Runs in the browser: Plotly figures cannot drive each other.
+_CURSOR_SYNC = """
+<script>
+(() => {
+  if (window.__echemCursor) return;
+  window.__echemCursor = true;
+  const plots = () => [...document.querySelectorAll('.js-plotly-plot')];
+  const move = (name) => {
+    const mini = plots().find(p => p.layout && p.layout.meta && p.layout.meta.cursor);
+    const f = parseInt(name, 10);
+    if (!mini || Number.isNaN(f) || !window.Plotly) return;
+    const upd = {};
+    mini.layout.meta.cursor.forEach((xs, i) => {
+      const x = xs[Math.min(f, xs.length - 1)];
+      upd[`shapes[${i}].x0`] = x;
+      upd[`shapes[${i}].x1`] = x;
+    });
+    window.Plotly.relayout(mini, upd);
+  };
+  setInterval(() => {
+    plots().filter(p => p.layout && p.layout.meta && p.layout.meta.anim && !p.__cursorBound && p.on).forEach(gd => {
+      gd.__cursorBound = true;
+      gd.on('plotly_animatingframe', ev => move(ev.name));
+      gd.on('plotly_sliderchange', ev => move(ev.step.args[0][0]));
+    });
+  }, 400);
+})();
+</script>
+"""
+
+
+MIN_DRAWN_RADIUS_UM = 1.5  # smaller particles are drawn enlarged, or there would be thousands of dots
+
+
+def _particle_centres(x0, x1, height, r, fraction):
+    """Hexagonal grid of particle centres filling [x0, x1] × [0, height] at roughly ``fraction`` area coverage."""
+    spacing = r * np.sqrt(2 * np.pi / (np.sqrt(3) * min(max(fraction, 0.2), 0.85)))
+    centres = []
+    for j, y in enumerate(np.arange(r, height - r + 1e-9, spacing * np.sqrt(3) / 2)):
+        offset = spacing / 2 if j % 2 else 0.0
+        centres += [(x, y) for x in np.arange(x0 + r + offset, x1 - r + 1e-9, spacing)]
+    return centres
+
+
+def _cell_cross_section(fig, row, col, geom, chemistry, height=70.0):
+    """A to-scale cross-section of one electrode pair, sharing the µm x-axis of the plots below it."""
+    anode_name, cathode_name = (p.strip() for p in reversed(chemistry.split("|")[:2])) if "|" in chemistry else ("anode", "cathode")
+    la, ls, lc = geom["anode"], geom["separator"], geom["cathode"]
+    x_sep, x_cat, x_end = la, la + ls, la + ls + lc
+    ref = dict(row=row, col=col)
+    ax = _axis_suffix(row, col)
+    rect = lambda x0, x1, **kw: fig.add_shape(type="rect", x0=x0, x1=x1, y0=0, y1=height, layer="below", **kw, **ref)  # noqa: E731
+    rect(-geom["anode_cc"], 0, fillcolor="#b87333", line_width=0)  # copper current collector
+    rect(0, x_end, fillcolor=band_fill(), line_width=0)  # electrolyte fills every pore
+    rect(x_sep, x_cat, fillcolor=MUTED, opacity=0.45, line_width=0)  # porous separator
+    rect(x_end, x_end + geom["cathode_cc"], fillcolor="#a8adb5", line_width=0)  # aluminium current collector
+    for x0, x1, r_true, frac, fill in [
+        (0, x_sep, geom["anode_particle_radius"], geom["anode_active_fraction"], "#4b4f58"),
+        (x_cat, x_end, geom["cathode_particle_radius"], geom["cathode_active_fraction"], "#8d6fb0"),
+    ]:
+        r = max(r_true, MIN_DRAWN_RADIUS_UM)
+        for cx, cy in _particle_centres(x0, x1, height, r, frac):
+            fig.add_shape(type="circle", x0=cx - r, x1=cx + r, y0=cy - r, y1=cy + r, fillcolor=fill,
+                          line=dict(width=0.6, color="rgba(255,255,255,0.35)"), **ref)
+    for x, text in [(-geom["anode_cc"] / 2, "Cu"), (x_sep / 2, f"Anode<br>{anode_name}"), ((x_sep + x_cat) / 2, "Sep."),
+                    ((x_cat + x_end) / 2, f"Cathode<br>{cathode_name}"), (x_end + geom["cathode_cc"] / 2, "Al")]:
+        fig.add_annotation(x=x, y=1.0, xref=f"x{ax}", yref=f"y{ax} domain", text=text, showarrow=False,
+                           yanchor="bottom", font=dict(size=11))
+    # Equal µm per pixel in x and y, so particles are round and to scale.
+    fig.update_yaxes(range=[0, height], visible=False, scaleanchor=f"x{ax}", scaleratio=1, constrain="domain", row=row, col=col)
+    fig.update_xaxes(range=[-geom["anode_cc"], x_end + geom["cathode_cc"]], showgrid=False, row=row, col=col)
+
+
+def _axis_suffix(row, col, n_cols=2):
+    """Plotly names subplot axes x, x2, x3, ... in row-major order."""
+    n = (row - 1) * n_cols + col
+    return "" if n == 1 else str(n)
 
 
 def _field_ranges(runs, label):
@@ -199,10 +291,18 @@ def _inside(runs, colors):
     chosen = st.multiselect("Profiles", labels, default=labels[:4], max_selections=6)
     if not chosen:
         return
-    n_rows = 1 + (len(chosen) + 1) // 2
-    specs = [[{"colspan": 2}, None]] + [[{}, {}] for _ in range(n_rows - 1)]
-    titles = ["Terminal voltage (V) · marker = current frame"] + chosen
-    fig = make_subplots(rows=n_rows, cols=2, specs=specs, subplot_titles=titles, vertical_spacing=0.36 / n_rows, horizontal_spacing=0.08)
+    # Row 1 in each column is a to-scale drawing of the cell on the same µm axis as
+    # the profiles below it. It is built from shapes only, so it never animates.
+    geom = runs[0].meta.get("geometry_um")
+    top = 1 if geom else 0
+    n_rows = top + (len(chosen) + 1) // 2
+    titles = (["", ""] if geom else []) + chosen  # the cross-section labels its own layers
+    fig = make_subplots(rows=n_rows, cols=2, subplot_titles=titles, vertical_spacing=0.3 / n_rows, horizontal_spacing=0.08,
+                        row_heights=([0.5] if geom else []) + [1.0] * (n_rows - top))
+    if geom:
+        x_range = [-geom["anode_cc"], geom["anode"] + geom["separator"] + geom["cathode"] + geom["cathode_cc"]]
+        for c in (1, 2):
+            _cell_cross_section(fig, 1, c, geom, runs[0].config["chemistry"])
     idxs = [_frame_idx(r) for r in runs]
 
     def frame_traces(f):
@@ -210,44 +310,51 @@ def _inside(runs, colors):
         out = []
         for run, color, idx in zip(runs, colors, idxs):
             k = idx[min(f, len(idx) - 1)]
-            x, _ = _x_axis(run, "Test progress (%)")
-            out.append(go.Scatter(x=[x[k]], y=[run.series["Voltage [V]"].iloc[k]], mode="markers",
-                                  marker=dict(size=12, color=color, line=dict(width=2, color="white")), showlegend=False))
             for lab in chosen:
                 for part, arr in run.fields[lab].items():
-                    xs = run.x_um[part]
-                    out.append(go.Scatter(x=xs, y=arr[:, k], mode="lines", line=dict(width=2, color=color), showlegend=False,
+                    out.append(go.Scatter(x=run.x_um[part], y=arr[:, k], mode="lines", line=dict(width=2, color=color),
+                                          name=run.label, legendgroup=run.label, showlegend=False,
                                           hovertemplate=f"{lab}<br>x %{{x:.0f}} µm<br>%{{y:.4g}}<extra>{run.label}</extra>"))
         return out
 
-    # Static voltage traces first (never animated), then the animated traces.
-    for run, color in zip(runs, colors):
-        x, _ = _x_axis(run, "Test progress (%)")
-        fig.add_trace(go.Scatter(x=x, y=run.series["Voltage [V]"], mode="lines", line=dict(width=2, color=color), name=run.label), row=1, col=1)
-    n_static = len(fig.data)
-    positions = []
-    for run in runs:
-        positions.append((1, 1))
-        for j, lab in enumerate(chosen):
-            for _ in run.fields[lab]:
-                positions.append((2 + j // 2, 1 + j % 2))
+    positions = [(top + 1 + j // 2, 1 + j % 2) for run in runs for j, lab in enumerate(chosen) for _ in run.fields[lab]]
     for tr, (r, c) in zip(frame_traces(0), positions):
         fig.add_trace(tr, row=r, col=c)
-    anim_ids = list(range(n_static, len(fig.data)))
-
-    fig.frames = [go.Frame(data=frame_traces(f), traces=anim_ids, name=str(f)) for f in range(N_FRAMES)]
+    fig.frames = [go.Frame(data=frame_traces(f), name=str(f)) for f in range(N_FRAMES)]
     for j, lab in enumerate(chosen):
-        r, c = 2 + j // 2, 1 + j % 2
+        r, c = top + 1 + j // 2, 1 + j % 2
         fig.update_yaxes(range=_field_ranges(runs, lab), row=r, col=c)
-        fig.update_xaxes(title_text="x through the cell (µm)", row=r, col=c)
+        fig.update_xaxes(title_text="x through the cell (µm)", row=r, col=c, **({"range": x_range} if geom else {}))
         sep = runs[0].x_um
         fig.add_vrect(x0=sep["n"][-1], x1=sep["p"][0], fillcolor=MUTED, opacity=0.12, line_width=0, row=r, col=c)
-    fig.update_xaxes(title_text="test progress (%)", row=1, col=1)
+    fig.update_layout(meta={"anim": True})
 
-    st.plotly_chart(_animation_controls(style(fig, 340 * n_rows), N_FRAMES), use_container_width=True)
-    st.caption("Drag the slider or press Play. Anode on the left, separator shaded, cathode on the right. "
-               "Overlaid runs are matched by % of test progress, so the same slider position is the same fraction of each test.")
+    st.plotly_chart(_animation_controls(style(fig, 340 * (n_rows - top) + 200 * top), N_FRAMES), use_container_width=True)
+    st.caption("Drag the slider or press Play; the grey line in the Cell response panel follows along. "
+               "The grey band in each plot is the **separator**: a porous polymer film that keeps the electrodes apart "
+               "while electrolyte in its pores carries Li⁺. (SEI is a nanometre-thin film on the anode particles, far too thin to see here.) "
+               "Overlaid runs are matched by % of test progress.")
+    if geom:
+        _cross_section_notes(geom)
     cards(chosen)
+
+
+def _cross_section_notes(geom):
+    small = [f"{name} particles (radius {geom[f'{key}_particle_radius'] * 1000:.0f} nm)"
+             for key, name in (("anode", "anode"), ("cathode", "cathode")) if geom[f"{key}_particle_radius"] < MIN_DRAWN_RADIUS_UM]
+    with st.expander("Reading the cross-section"):
+        st.markdown(
+            f"""
+- **Cu / Al**: copper and aluminium current collectors ({geom['anode_cc']:g} µm and {geom['cathode_cc']:g} µm). They carry electrons to the tabs; no lithium enters them.
+- **Anode** ({geom['anode']:g} µm): active particles (dark) packed at {geom['anode_active_fraction']:.0%} by volume. The rest is pores full of electrolyte (blue tint), plus binder and carbon.
+- **Separator** ({geom['separator']:g} µm): electronically insulating, ionically conducting.
+- **Cathode** ({geom['cathode']:g} µm): active particles (purple) at {geom['cathode_active_fraction']:.0%} by volume.
+- **Li⁺ path**: on discharge, lithium leaves the anode particles, crosses the electrolyte through the separator as Li⁺ and enters the cathode particles, while electrons go round the external circuit. Charge reverses it.
+
+Particle radii and layer thicknesses are the model's own parameters, drawn to the same µm scale as the plots. The model treats the particles as spheres; the drawing is a 2-D slice through them.
+"""
+            + (f"\n{' and '.join(small).capitalize()} are too small to draw individually, so they are shown enlarged to {MIN_DRAWN_RADIUS_UM} µm." if small else "")
+        )
 
 
 def _particles(runs, colors):
@@ -269,6 +376,7 @@ def _particles(runs, colors):
     hi = max(np.nanmax(r.particles[pick]) for r in runs_k)
     fig.update_yaxes(range=[lo - 0.02, hi + 0.02], title_text="stoichiometry (lithium fraction)")
     fig.update_xaxes(title_text="radius r / R  (0 = centre, 1 = surface)")
+    fig.update_layout(meta={"anim": True})
     st.plotly_chart(_animation_controls(style(fig, 520), N_FRAMES), use_container_width=True)
     st.caption("A flat profile means the particle is in equilibrium; a steep one means solid diffusion is limiting. "
                "The surface value is what sets the electrode's potential.")
@@ -372,11 +480,11 @@ def _all_metrics(runs, colors, xmode):
 
 
 def page():
-    st.title("Electrochemistry")
-    mode = st.sidebar.radio("Data", ["Simulate (PyBaMM)", "Measured datasets"], horizontal=True,
+    mode =st.sidebar.radio("Data", ["Simulate (PyBaMM)", "Measured datasets"], horizontal=True,
                             index=["Simulate (PyBaMM)", "Measured datasets"].index(st.session_state.get("_echem_mode", "Simulate (PyBaMM)")))
     st.session_state["_echem_mode"] = mode
     if mode == "Measured datasets":
+        st.title("Electrochemistry")
         picked = measured.pick_measured()
         if picked:
             opt, cell = picked
@@ -396,14 +504,20 @@ def page():
     runs = _pins(run)
     colors = categorical(len(runs))
 
-    st.markdown(f"**{run.label}**  \n{TEST_HELP[cfg['test']]}")
-    if run.meta.get("borrowed_parameters"):
-        st.caption(f"This parameter set has no thermal/current-collector data; {len(run.meta['borrowed_parameters'])} values are borrowed from Chen2020.")
-    _kpis(run)
-    xmode = st.radio("x-axis for time plots", ["Test progress (%)", "Time (h)", "Capacity (Ah)"], horizontal=True)
-
+    # Layout: the plots get the whole left column, starting right at the top.
+    # Everything else lives in a persistent panel on the right that stays in
+    # view (sticky) and scrolls on its own if it is taller than the window.
+    # Below 640 px Streamlit stacks columns; the panel then goes first and stops sticking.
+    side_col = "[data-testid='stColumn']:has(.st-key-echem_side)"
+    st.html(
+        "<style>[data-testid='stMainBlockContainer']{padding-top:3rem}"
+        f"@media (min-width:641px){{{side_col}{{position:sticky;top:3.5rem;align-self:flex-start;"
+        "max-height:calc(100vh - 4.5rem);overflow-y:auto;overflow-x:hidden}}"
+        f"@media (max-width:640px){{{side_col}{{order:-1}}}}</style>"
+    )
+    # Voltage, current and temperature live in the side panel, so there is no
+    # separate tab for them. The lambdas read xmode when called, after the panel sets it.
     views = {
-        "Cell response": lambda: _response(runs, xmode),
         "Inside the cell": lambda: _inside(runs, colors),
         "Inside the particles": lambda: _particles(runs, colors),
         "Voltage losses": lambda: _losses(runs, colors, xmode),
@@ -412,19 +526,28 @@ def page():
         "Any metric": lambda: _all_metrics(runs, colors, xmode),
         "Your analysis (workbench)": lambda: panels.render(run_to_celldata(run), prefixes=("A", "C", "example", "misc")),
     }
-    # The tabs report which one is open, so only that one is drawn, and every
-    # tab other than Cell response keeps a mini V/I/T panel on the right.
-    tabs = st.tabs(list(views), key="echem_tab", on_change="rerun")
-    active = st.session_state.get("echem_tab") or "Cell response"
-    for name, tab in zip(views, tabs):
-        if name != active:
-            continue
-        with tab:
-            if name == "Cell response":
-                views[name]()
-            else:
-                main, side = st.columns([3, 1.15], gap="medium")
-                with main:
+    animated = {"Inside the cell", "Inside the particles"}
+    if st.session_state.get("echem_tab") not in views:
+        st.session_state["echem_tab"] = next(iter(views))
+    active = st.session_state["echem_tab"]
+
+    main, side = st.columns([3, 1.15], gap="medium")
+    with side, st.container(key="echem_side"):
+        st.markdown("#### Electrochemistry")
+        st.markdown(f"**{run.label}**")
+        st.caption(TEST_HELP[cfg["test"]])
+        if run.meta.get("borrowed_parameters"):
+            st.caption(f"No thermal/current-collector data in this set; {len(run.meta['borrowed_parameters'])} values borrowed from Chen2020.")
+        _kpis(run)
+        xmode = st.radio("x-axis for time plots", ["Test progress (%)", "Time (h)", "Capacity (Ah)"], horizontal=True)
+        _mini_response(runs, xmode, cursor=active in animated)
+    if active in animated:
+        st.html(_CURSOR_SYNC, unsafe_allow_javascript=True)
+
+    with main:
+        # The tabs report which one is open, so only that one is drawn.
+        tabs = st.tabs(list(views), key="echem_tab", on_change="rerun")
+        for name, tab in zip(views, tabs):
+            if name == active:
+                with tab:
                     views[name]()
-                with side:
-                    _mini_response(runs, xmode)
