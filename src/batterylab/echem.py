@@ -270,8 +270,25 @@ def simulate_test(
         "description": CHEMISTRIES[chemistry][1],
         "termination": str(getattr(sol, "termination", "")),
         "borrowed_parameters": borrowed,
+        "geometry_um": cell_geometry(pv),
     }
     return EchemRun(config, t, series_df, x, fields, r, particles, meta)
+
+
+def cell_geometry(pv) -> dict[str, float]:
+    """Layer thicknesses and particle radii (µm) plus active-material fractions, for drawing the cell."""
+    um = lambda k: float(pv[k]) * 1e6  # noqa: E731
+    return {
+        "anode": um("Negative electrode thickness [m]"),
+        "separator": um("Separator thickness [m]"),
+        "cathode": um("Positive electrode thickness [m]"),
+        "anode_cc": um("Negative current collector thickness [m]"),
+        "cathode_cc": um("Positive current collector thickness [m]"),
+        "anode_particle_radius": um("Negative particle radius [m]"),
+        "cathode_particle_radius": um("Positive particle radius [m]"),
+        "anode_active_fraction": float(pv["Negative electrode active material volume fraction"]),
+        "cathode_active_fraction": float(pv["Positive electrode active material volume fraction"]),
+    }
 
 
 def ocp_curves(chemistry: str, n: int = 200) -> pd.DataFrame:
