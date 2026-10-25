@@ -44,13 +44,20 @@ It opens at http://localhost:8501 with two views and a progress tracker.
 **Electrochemistry** shows what happens inside a cell. Pick a chemistry
 (NMC811, NMC532, LFP, LCO, NCA), a test (CC discharge, CC-CV charge, HPPC,
 GITT, drive cycle, relaxation) and conditions (C-rate, temperature, model,
-LLI/LAM ageing). PyBaMM re-runs and every view updates. Pin up to two runs,
-change one condition, and see what moves.
+LLI/LAM ageing). PyBaMM re-runs and every view updates. Add up to three
+tests, each with its own settings, and every tab compares them. Plots of a
+single quantity overlay one colour per test. Charts that already use colour
+for several mechanisms (voltage losses, heat sources) get a toggle to pick
+the test instead.
 
-* *Cell response*: voltage, current and temperature.
-* *Inside the cell*: animated profiles through the electrode stack:
-  electrolyte concentration and potential, particle surface stoichiometry,
-  interfacial current, overpotential.
+A side panel stays in view on every tab. It shows each test's description,
+its headline numbers and a small voltage/current/temperature plot. While an
+animated tab plays, a cursor on that plot follows the animation.
+
+* *Inside the cell*: a to-scale cross-section of the cell, above animated
+  profiles through the electrode stack: electrolyte concentration and
+  potential, particle surface stoichiometry, interfacial current,
+  overpotential.
 * *Inside the particles*: animated radial lithium profiles.
 * *Voltage losses*: OCV − V split into particle diffusion, reaction,
   electrolyte and ohmic losses.
