@@ -117,3 +117,41 @@ def test_geometry_matches_the_mesh():
     assert run.x_um["full"][-1] == pytest.approx(span, abs=span / 20)
     assert run.x_um["n"][-1] < g["anode"] < run.x_um["p"][0]
     assert 0 < g["anode_active_fraction"] < 1 and g["cathode_particle_radius"] > 0
+
+
+def test_scale_parameters_handles_values_and_functions():
+    import pybamm
+
+    pv = pybamm.ParameterValues("Chen2020")
+    radius = pv["Negative particle radius [m]"]
+    kappa = pv["Electrolyte conductivity [S.m-1]"]
+    echem.scale_parameters(pv, {"Negative particle radius [m]": 2.0, "Electrolyte conductivity [S.m-1]": 0.5})
+    assert pv["Negative particle radius [m]"] == pytest.approx(2 * radius)
+    c, T = pybamm.Scalar(1000.0), pybamm.Scalar(298.15)
+    assert pv.evaluate(pv["Electrolyte conductivity [S.m-1]"](c, T)) == pytest.approx(0.5 * pv.evaluate(kappa(c, T)))
+
+
+@pytest.mark.slow
+def test_knobs_change_the_physics_the_expected_way():
+    q = lambda r: r.series["Discharge capacity [Ah]"].max()  # noqa: E731
+    base = echem.simulate_test(model="SPMe", c_rate=2.0)
+    slow_solid = echem.simulate_test(model="SPMe", c_rate=2.0,
+                                     parameter_scales={"Positive particle diffusivity [m2.s-1]": 0.5})
+    thin = echem.simulate_test(model="SPMe", c_rate=2.0, parameter_scales={"Positive electrode thickness [m]": 0.5})
+    assert q(slow_solid) < q(base)  # slower solid diffusion: less capacity at 2C
+    assert q(thin) < 0.6 * q(base)  # half the cathode: about half the capacity
+    assert "Cathode solid diffusivity ×0.5" in slow_solid.label
+
+
+@pytest.mark.slow
+def test_ageing_bookkeeping():
+    from batterylab.ageing import simulate_ageing
+
+    r = simulate_ageing(cycles=5, accelerate=10)
+    c = r.cycles
+    assert list(c["cycle"]) == [1, 2, 3, 4, 5]
+    assert c["discharge_capacity_ah"].iloc[-1] < c["discharge_capacity_ah"].iloc[0]
+    assert (c["Lost to SEI [Ah]"].diff().dropna() >= 0).all()  # lithium lost to SEI only accumulates
+    assert r.states["SEI thickness [nm]"].iloc[-1] > r.states["SEI thickness [nm]"].iloc[0]
+    off = simulate_ageing(cycles=3, sei=False, plating=False, cracking=False)
+    assert "SEI thickness [nm]" not in off.states or off.states["SEI thickness [nm]"].abs().max() == 0
