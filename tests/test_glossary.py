@@ -6,12 +6,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dashboard"))
 
 from batterylab.ageing import STATES  # noqa: E402
-from batterylab.echem import FIELDS, KNOBS, SERIES_GROUPS  # noqa: E402
+from batterylab.echem import ELECTRODE_POTENTIALS, FIELDS, KNOBS, SERIES_GROUPS  # noqa: E402
 from glossary import GLOSSARY, LOSS_KEYS  # noqa: E402
 
 
 def test_every_plotted_metric_is_explained():
-    labels = set(FIELDS) | {"Anode potential at separator vs Li [V]", "particles", "windows", "sensitivity"}
+    labels = set(FIELDS) | set(ELECTRODE_POTENTIALS) | {"particles", "windows", "sensitivity", "terminal voltage"}
     labels |= {f"knob:{k}" for k in KNOBS} | {f"ageing:{s}" for s in STATES}
     labels |= {"ageing:capacity", "ageing:breakdown", "ageing:lam", "ageing:curves", "ageing:acceleration"}
     for group, members in SERIES_GROUPS.items():
