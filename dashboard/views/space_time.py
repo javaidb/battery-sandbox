@@ -60,7 +60,7 @@ def render(runs, colors, xmode):
             fig.add_annotation(x=0.005, xref=f"x{ax} domain", y=y, yref=f"y{ax}", text=text, showarrow=False, xanchor="left",
                                font=dict(size=10, color="#f0efec"), bgcolor="rgba(0,0,0,0.35)")
     fig.update_xaxes(title_text=xlabel, row=len(runs), col=1)
-    st.plotly_chart(style(fig, 300 * len(runs) + 80), use_container_width=True)
+    st.plotly_chart(style(fig, 300 * len(runs) + 80), width="stretch")
     st.caption(
         "Read across for time, up for position (anode at the bottom, the dotted lines are the separator's edges). "
         + ("Colour is signed: grey means zero, blue and red are opposite directions. " if signed else "")
