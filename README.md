@@ -35,6 +35,10 @@ cell.metadata["ground_truth"]
 
 ## Dashboard
 
+On Windows, double-click **`run_dashboard.bat`**. On first run it creates the
+`.venv` and installs everything, then opens the dashboard in your browser.
+Or from a terminal:
+
 ```bash
 .venv/Scripts/python -m streamlit run dashboard/app.py
 ```
