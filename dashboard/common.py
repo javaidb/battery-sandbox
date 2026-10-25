@@ -75,6 +75,12 @@ def ramp(n: int) -> list[str]:
     return [seq[i] for i in idx]
 
 
+def sequential_scale() -> list[list]:
+    """Plotly colourscale from the sequential ramp: low values recede, high values stand out (both themes)."""
+    seq = ramp(10)
+    return [[i / (len(seq) - 1), c] for i, c in enumerate(seq)]
+
+
 def style(fig, height: int = 420, legend_title: str | None = None):
     fig.update_layout(
         height=height,
