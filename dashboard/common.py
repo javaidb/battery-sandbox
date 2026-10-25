@@ -100,6 +100,58 @@ def style(fig, height: int = 420, legend_title: str | None = None):
     return fig
 
 
+# --- tabs -------------------------------------------------------------------
+
+# Material Symbols names (fonts.google.com/icons) drawn above each tab's name.
+TAB_ICONS = {
+    "Inside the cell": "layers",
+    "Inside the particles": "bubble_chart",
+    "Space–time maps": "grid_on",
+    "Voltage losses": "bolt",
+    "Electrode windows": "straighten",
+    "Heat & plating": "local_fire_department",
+    "Physics knobs": "tune",
+    "Ageing": "hourglass_bottom",
+    "Any metric": "query_stats",
+    "Your analysis (workbench)": "construction",
+    "Plant & sensors": "sensors",
+    "SoC estimation": "battery_charging_full",
+    "Robustness": "shield",
+    "ECM check": "electrical_services",
+    "Your panels (workbench)": "construction",
+    "Data": "dataset",
+    "Fade": "trending_down",
+    "V–Q curves": "ssid_chart",
+    "Time series": "timeline",
+    "Tables": "table_chart",
+    "Extras": "extension",
+    "Metadata": "info",
+}
+
+# Icon stacked over the name; the gap between tabs grows with the window,
+# from 1rem on a laptop to 3rem on a wide monitor. Tabs that do not fit wrap onto a second row
+# rather than scrolling out of sight.
+_TAB_CSS = (
+    "<style>[data-testid='stTabs'] [role='tablist']{flex-wrap:wrap;row-gap:.25rem;"
+    "column-gap:clamp(1rem,2.4vw - .5rem,3rem)}"
+    "[data-testid='stTab']{height:auto;padding:.4rem .25rem 0}"
+    "[data-testid='stTab'] [data-testid='stMarkdownContainer'] p{display:flex;flex-direction:column;"
+    "align-items:center;gap:.15rem;line-height:1.2;padding-bottom:.35rem}"
+    "[data-testid='stTab'] p>span[role='img']{font-size:1.25rem}</style>"
+)
+
+
+def tab_label(name: str) -> str:
+    icon = TAB_ICONS.get(name)
+    return f":material/{icon}: {name}" if icon else name
+
+
+def tabs(names: list[str], **kwargs):
+    """st.tabs with an icon above each name; with a key, session state holds tab_label(name)."""
+    st.html(_TAB_CSS)
+    return st.tabs([tab_label(n) for n in names], **kwargs)
+
+
 def x_axis(run, mode: str) -> tuple[np.ndarray, str]:
     """x values and axis label for a simulated run: test progress (%), time (h) or capacity moved (Ah)."""
     t = run.series.index.to_numpy()
