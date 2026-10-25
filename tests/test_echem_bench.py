@@ -29,6 +29,8 @@ def test_dfn_exposes_fields_and_particles():
     parts = [k for k in echem.SERIES_GROUPS["Voltage breakdown"] if k != "Open-circuit voltage [V]"]
     gap = s["Voltage [V]"] - s["Open-circuit voltage [V]"]
     np.testing.assert_allclose(s[parts].sum(axis=1), gap, atol=5e-3)
+    # And the two electrode potentials vs the reference make up the terminal voltage.
+    np.testing.assert_allclose(s["Cathode potential vs Li [V]"] - s["Anode potential vs Li [V]"], s["Voltage [V]"], atol=5e-3)
 
 
 @pytest.mark.slow
