@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from common import MUTED, categorical, cell_tables, discover_cells, load_cell, ramp, rate_groups, style, thin
+from common import MUTED, categorical, cell_tables, discover_cells, load_cell, ramp, rate_groups, style, tabs, thin
 
 
 def pick_measured():
@@ -58,7 +58,7 @@ def render(opt, cell):
         first, last = full["discharge_ah"].iloc[0], full["discharge_ah"].iloc[-1]
         c[4].metric("Discharge Ah, last vs first full step", f"{last:.3f}", f"{(last / first - 1) * 100:+.1f} %")
 
-    tab_fade, tab_vq, tab_ts, tab_tables, tab_extras, tab_meta = st.tabs(
+    tab_fade, tab_vq, tab_ts, tab_tables, tab_extras, tab_meta = tabs(
         ["Fade", "V–Q curves", "Time series", "Tables", "Extras", "Metadata"]
     )
 
