@@ -35,6 +35,9 @@ CHEMISTRIES: dict[str, tuple[str, str]] = {
 
 TESTS = ("CC discharge", "CC-CV charge", "HPPC", "GITT", "Drive cycle", "Relaxation after pulse")
 
+# Electrode potentials vs a lithium reference, added to every run's series alongside SERIES_GROUPS.
+ELECTRODE_POTENTIALS = ("Cathode potential vs Li [V]", "Anode potential vs Li [V]", "Anode potential at separator vs Li [V]")
+
 # Scalar series: label -> (PyBaMM variable, scale, offset). Grouped for display.
 SERIES_GROUPS: dict[str, dict[str, str]] = {
     "Terminal": {
@@ -282,6 +285,12 @@ def simulate_test(
     # Anode potential vs Li/Li+ next to the separator: below 0 V lithium plating is thermodynamically possible.
     spd = np.atleast_2d(sol["Negative electrode surface potential difference [V]"].entries)
     series["Anode potential at separator vs Li [V]"] = spd[-1] if spd.shape[0] > 1 else spd[0]
+    # Each electrode's potential at its current collector, measured against a lithium reference electrode
+    # in the middle of the separator (as in a three-electrode cell). Cathode minus anode is the terminal voltage.
+    phi_e = np.atleast_2d(sol["Separator electrolyte potential [V]"].entries)
+    phi_ref = phi_e[phi_e.shape[0] // 2]
+    series["Cathode potential vs Li [V]"] = np.atleast_2d(sol["Positive electrode potential [V]"].entries)[-1] - phi_ref
+    series["Anode potential vs Li [V]"] = np.atleast_2d(sol["Negative electrode potential [V]"].entries)[0] - phi_ref
     series_df = pd.DataFrame(series, index=pd.Index(t, name="time_s"))
 
     x = {k: sol[f"x{'_' + k if k != 'full' else ''} [m]"].entries[:, 0] * 1e6 for k in ("full", "n", "p")}
