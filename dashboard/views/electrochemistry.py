@@ -14,7 +14,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from batterylab.echem import CHEMISTRIES, FIELDS, SERIES_GROUPS, TESTS
-from common import CRITICAL, MUTED, categorical, ocp_curves, run_to_celldata, simulate, style
+from common import CRITICAL, MUTED, categorical, metric_colors, ocp_curves, run_to_celldata, simulate, style
 from views import measured, panels
 
 MAX_PINNED = 2
@@ -72,10 +72,12 @@ def _pins(current) -> list:
         pinned.append(current)
         st.rerun()
     colors = categorical(3)
-    sb.markdown(f"<span style='color:{colors[0]}'>●</span> **current:** {current.label}", unsafe_allow_html=True)
+    # Colour identifies a run in most views; line style identifies it in the V/I/T plots.
+    glyph = ["━━", "╍╍", "┅┅"]
+    sb.markdown(f"<span style='color:{colors[0]}'>●</span> `{glyph[0]}` **current:** {current.label}", unsafe_allow_html=True)
     for k, p in enumerate(list(pinned)):
         c1, c2 = sb.columns([6, 1])
-        c1.markdown(f"<span style='color:{colors[k + 1]}'>●</span> {p.label}", unsafe_allow_html=True)
+        c1.markdown(f"<span style='color:{colors[k + 1]}'>●</span> `{glyph[k + 1]}` {p.label}", unsafe_allow_html=True)
         if c2.button("✕", key=f"unpin{k}", help="Unpin"):
             pinned.pop(k)
             st.rerun()
@@ -144,17 +146,39 @@ def _animation_controls(fig, n_frames: int, bottom_px: int = 90):
 # --- sections ---------------------------------------------------------------
 
 
-def _response(runs, colors, xmode):
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-                        subplot_titles=("Terminal voltage (V)", "Current (A, + = charge)", "Cell temperature (°C)"))
-    for run, color in zip(runs, colors):
+RESPONSE = [("Voltage [V]", "voltage", "Voltage (V)"), ("Current [A]", "current", "Current (A, + = charge)"),
+            ("Cell temperature [°C]", "temperature", "Temperature (°C)")]
+RUN_DASH = ["solid", "dash", "dot"]
+
+
+def _response(runs, xmode, compact: bool = False):
+    """Voltage, current and temperature. Each metric has its own colour; runs are told apart by line style."""
+    colors = metric_colors()
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.09 if compact else 0.05,
+                        subplot_titles=[title for *_, title in RESPONSE])
+    for run, dash in zip(runs, RUN_DASH):
         x, xlabel = _x_axis(run, xmode)
-        for r, col in enumerate(["Voltage [V]", "Current [A]", "Cell temperature [°C]"], start=1):
-            fig.add_trace(go.Scatter(x=x, y=run.series[col], mode="lines", line=dict(width=2, color=color),
-                                     name=run.label, legendgroup=run.label, showlegend=r == 1), row=r, col=1)
+        for r, (col, kind, _) in enumerate(RESPONSE, start=1):
+            fig.add_trace(go.Scatter(x=x, y=run.series[col], mode="lines", line=dict(width=2 if compact else 2.5, color=colors[kind], dash=dash),
+                                     name=run.label, legendgroup=run.label, showlegend=False), row=r, col=1)
+    if len(runs) > 1:  # legend entries for line style only, in neutral ink
+        for run, dash in zip(runs, RUN_DASH):
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", line=dict(width=2, color=MUTED, dash=dash), name=run.label))
     fig.update_xaxes(title_text=xlabel, row=3, col=1)
     fig.update_layout(hovermode="x unified")
-    st.plotly_chart(style(fig, 620), use_container_width=True)
+    if compact:
+        fig.update_annotations(font_size=12)
+        fig.update_layout(legend=dict(font_size=10))
+    st.plotly_chart(style(fig, 520 if compact else 620), use_container_width=True, key=f"response_{compact}")
+
+
+def _mini_response(runs, xmode):
+    # Sticky, so it stays in view while you scroll a tall figure beside it.
+    # The column is the element that sticks: it sits in a row as tall as the main figure.
+    st.html("<style>[data-testid='stColumn']:has(.st-key-mini_response){position:sticky;top:4rem;align-self:flex-start;z-index:5}</style>")
+    with st.container(border=True, key="mini_response"):
+        st.caption("Cell response")
+        _response(runs, xmode, compact=True)
 
 
 def _field_ranges(runs, label):
@@ -367,21 +391,29 @@ def page():
     _kpis(run)
     xmode = st.radio("x-axis for time plots", ["Test progress (%)", "Time (h)", "Capacity (Ah)"], horizontal=True)
 
-    tabs = st.tabs(["Cell response", "Inside the cell", "Inside the particles", "Voltage losses", "Electrode windows",
-                    "Heat & plating", "Any metric", "Your analysis (workbench)"])
-    with tabs[0]:
-        _response(runs, colors, xmode)
-    with tabs[1]:
-        _inside(runs, colors)
-    with tabs[2]:
-        _particles(runs, colors)
-    with tabs[3]:
-        _losses(runs, colors, xmode)
-    with tabs[4]:
-        _windows(runs, colors)
-    with tabs[5]:
-        _heat_safety(runs, colors, xmode)
-    with tabs[6]:
-        _all_metrics(runs, colors, xmode)
-    with tabs[7]:
-        panels.render(run_to_celldata(run), prefixes=("A", "C", "example", "misc"))
+    views = {
+        "Cell response": lambda: _response(runs, xmode),
+        "Inside the cell": lambda: _inside(runs, colors),
+        "Inside the particles": lambda: _particles(runs, colors),
+        "Voltage losses": lambda: _losses(runs, colors, xmode),
+        "Electrode windows": lambda: _windows(runs, colors),
+        "Heat & plating": lambda: _heat_safety(runs, colors, xmode),
+        "Any metric": lambda: _all_metrics(runs, colors, xmode),
+        "Your analysis (workbench)": lambda: panels.render(run_to_celldata(run), prefixes=("A", "C", "example", "misc")),
+    }
+    # The tabs report which one is open, so only that one is drawn, and every
+    # tab other than Cell response keeps a mini V/I/T panel on the right.
+    tabs = st.tabs(list(views), key="echem_tab", on_change="rerun")
+    active = st.session_state.get("echem_tab") or "Cell response"
+    for name, tab in zip(views, tabs):
+        if name != active:
+            continue
+        with tab:
+            if name == "Cell response":
+                views[name]()
+            else:
+                main, side = st.columns([3, 1.15], gap="medium")
+                with main:
+                    views[name]()
+                with side:
+                    _mini_response(runs, xmode)
