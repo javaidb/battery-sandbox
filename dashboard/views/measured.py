@@ -88,7 +88,7 @@ def render(opt, cell):
         if (s["rate"] == "other").any():
             m = s["rate"] == "other"
             fig.add_trace(go.Scatter(x=s.loc[m, "cycle_index"], y=y[m], name="other rates", mode="markers", marker=dict(size=8, color=MUTED)))
-        st.plotly_chart(style(fig, legend_title="|mean current|").update_layout(xaxis_title="cycle", yaxis_title=metric), use_container_width=True)
+        st.plotly_chart(style(fig, legend_title="|mean current|").update_layout(xaxis_title="cycle", yaxis_title=metric), width="stretch")
         st.caption("Steps are grouped by their mean current, so a capacity check at a different rate is not mixed into the fade trend.")
 
     # --- V-Q curves -------------------------------------------------------------
@@ -122,7 +122,7 @@ def render(opt, cell):
                 fig.add_trace(go.Scatter(x=d["q"], y=d["v"], name=f"cycle {row['cycle_index']}", mode="lines", line=dict(width=2, color=color)))
             st.plotly_chart(
                 style(fig, 480, "cycle").update_layout(xaxis_title="Ah" if ref is None else "Q / Q(first chosen)", yaxis_title="V"),
-                use_container_width=True,
+                width="stretch",
             )
             st.caption("This view only plots the raw data. Turning these curves into dQ/dV, DVA or degradation modes is module A1, in workbench/.")
 
@@ -141,7 +141,7 @@ def render(opt, cell):
             fig.add_trace(go.Scattergl(x=hours, y=d[colname], mode="lines", line=dict(width=1.5, color=categorical()[0]), showlegend=False, name=colname), row=r, col=1)
         fig.update_xaxes(title_text="hours from start of range", row=3, col=1)
         fig.update_layout(hovermode="x unified")
-        st.plotly_chart(style(fig, 640), use_container_width=True)
+        st.plotly_chart(style(fig, 640), width="stretch")
         if len(d) < len(w):
             st.caption(f"Showing {len(d):,} of {len(w):,} samples (every {len(w) // len(d)}th). Big gaps in time are recording pauses.")
 
@@ -155,7 +155,7 @@ def render(opt, cell):
             df = cycles
         else:
             df = w.head(5000)
-        st.dataframe(df, use_container_width=True, height=480)
+        st.dataframe(df, width="stretch", height=480)
         st.download_button("Download CSV", df.to_csv(index=False).encode(), file_name=f"{meta.get('cell_id', 'cell')}_{which.split()[0].lower()}.csv")
 
     # --- extras -----------------------------------------------------------------
@@ -172,9 +172,9 @@ def render(opt, cell):
                     e = df[df["record"] == r]
                     fig.add_trace(go.Scatter(x=e["z_real_ohm"], y=-e["z_imag_ohm"], name=f"record {r}", mode="markers", marker=dict(size=8, color=color)))
                 fig.update_yaxes(scaleanchor="x", scaleratio=1)
-                st.plotly_chart(style(fig, 460, "record").update_layout(xaxis_title="Re Z (Ω)", yaxis_title="−Im Z (Ω)"), use_container_width=True)
+                st.plotly_chart(style(fig, 460, "record").update_layout(xaxis_title="Re Z (Ω)", yaxis_title="−Im Z (Ω)"), width="stretch")
                 st.caption("Raw Nyquist data only, as stored (points are not frequency-ordered in NASA's file). Fitting ECMs and running DRT is module A2.")
-            st.dataframe(df, use_container_width=True, height=260)
+            st.dataframe(df, width="stretch", height=260)
 
     # --- metadata ---------------------------------------------------------------
     with tab_meta:
