@@ -85,6 +85,26 @@ def _classify(frac_pos: np.ndarray, frac_neg: np.ndarray) -> np.ndarray:
     return np.select([dyn, chg, dis], ["dynamic", "charge", "discharge"], default="rest")
 
 
+def step_capacity(
+    ts: pd.DataFrame,
+    rest_current_a: float | None = None,
+    max_gap_s: float = DEFAULT_MAX_GAP_S,
+) -> pd.DataFrame:
+    """Per-sample ``step_id`` and Ah moved since the start of that step.
+
+    ``q_ah`` is the running integral of |current|, so it rises from 0 in
+    every charge and discharge step. Plot ``voltage_v`` against it to get a
+    step's V-Q curve.
+    """
+    validate(ts)
+    thr = rest_threshold(ts["current_a"].to_numpy()) if rest_current_a is None else rest_current_a
+    step_id = assign_step_ids(ts, thr)
+    inc = _increments(ts, step_id, max_gap_s)
+    moved = (inc["charge_ah"] + inc["discharge_ah"]).to_numpy()
+    q = pd.Series(moved).groupby(step_id).cumsum().to_numpy()
+    return pd.DataFrame({"step_id": step_id, "q_ah": q}, index=ts.index)
+
+
 def step_table(
     ts: pd.DataFrame,
     rest_current_a: float | None = None,

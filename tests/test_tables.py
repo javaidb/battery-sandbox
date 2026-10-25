@@ -115,6 +115,17 @@ def test_celldata_methods_match_functions(profile):
     pd.testing.assert_frame_equal(cell.steps(), step_table(cell.timeseries))
 
 
+def test_step_capacity_restarts_each_step(profile):
+    from batterylab.tables import step_capacity
+
+    ts = conform(profile)
+    sc = step_capacity(ts)
+    ends = sc.groupby("step_id")["q_ah"].agg(["first", "last"])
+    np.testing.assert_allclose(ends["first"], 0.0)
+    np.testing.assert_allclose(ends["last"], [1, 0, 1, 0] * 2, atol=1e-12)
+    pd.testing.assert_index_equal(sc.index, ts.index)
+
+
 def test_rest_threshold_ignores_noise():
     ts = make_profile(1)
     noise = np.random.default_rng(1).normal(0, 2e-3, len(ts))

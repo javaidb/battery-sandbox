@@ -33,6 +33,53 @@ cell.metadata["ground_truth"]
 
 `bl.available_sources()` lists the registered loaders.
 
+## Dashboard
+
+```bash
+.venv/Scripts/python -m streamlit run dashboard/app.py
+```
+
+It opens at http://localhost:8501 with two views and a progress tracker.
+
+**Electrochemistry** shows what happens inside a cell. Pick a chemistry
+(NMC811, NMC532, LFP, LCO, NCA), a test (CC discharge, CC-CV charge, HPPC,
+GITT, drive cycle, relaxation) and conditions (C-rate, temperature, model,
+LLI/LAM ageing). PyBaMM re-runs and every view updates. Pin up to two runs,
+change one condition, and see what moves.
+
+* *Cell response*: voltage, current and temperature.
+* *Inside the cell*: animated profiles through the electrode stack:
+  electrolyte concentration and potential, particle surface stoichiometry,
+  interfacial current, overpotential.
+* *Inside the particles*: animated radial lithium profiles.
+* *Voltage losses*: OCV − V split into particle diffusion, reaction,
+  electrolyte and ohmic losses.
+* *Electrode windows*: the stretch of each electrode's OCP curve a test
+  used.
+* *Heat & plating*: heat sources, and the anode potential vs Li at the
+  separator (below 0 V, plating is possible).
+* *Measured datasets* mode: the downloaded NASA/Oxford/… cells, with fade,
+  V–Q curves and raw signals.
+
+**Algorithms** is a test bench for ECMs and state estimators. A PyBaMM
+model plays the real cell (the plant) under a drive or pulse profile.
+Sensor bias, noise and a wrong initial SoC are applied, and the plant's
+ageing is hidden from the estimator. Your estimators get only what a BMS
+would know, and are scored against the true SoC: RMSE, max error, and time
+to settle within 2 %. There is also a robustness grid (bias, initial error,
+noise, aged, cold) and an ECM check (model voltage vs plant, with
+residuals).
+
+**Progress** lists the "done when" criteria for every module, with notes,
+saved to `dashboard/progress.json`.
+
+Your code plugs in from `workbench/`: `@estimator` and `@ecm` for the
+Algorithms bench, and `@panel` for anything else (shown in either view's
+"Your analysis" tab). See [workbench/README.md](workbench/README.md). The
+module analyses themselves (ICA/DVA, DRT, ECM fitting, EKF/UKF, …) are left
+for you to write; the dashboard provides the data, the truth and the
+scoring.
+
 ## Canonical format
 
 `cell.timeseries` always starts with these columns:
