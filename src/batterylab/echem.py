@@ -112,6 +112,9 @@ class EchemRun:
         deg = {k: v for k, v in c.get("degradation", {}).items() if v}
         if deg:
             bits.append(", ".join(f"{k} {v:.0%}" for k, v in deg.items()))
+        knob_names = {v: k for k, v in KNOBS.items()}
+        for name, k in (c.get("parameter_scales") or {}).items():
+            bits.append(f"{knob_names.get(name, name)} ×{k:g}")
         if self.meta.get("name"):  # e.g. "Test 2", set by whoever is comparing runs
             bits.insert(0, self.meta["name"])
         return " · ".join(bits)
@@ -175,10 +178,40 @@ def _experiment_steps(test: str, c_rate: float, vmin: float, vmax: float) -> tup
 _THERMAL_WORDS = ("current collector", "heat", "thermal conductivity", "density", "Cell cooling", "Cell volume", "Total heat transfer")
 
 
-def _sim_parameters(chemistry: str, temperature_c: float, degradation: dict | None):
+#: Material and design properties you can scale ("physics knobs"): label -> PyBaMM parameter.
+KNOBS: dict[str, str] = {
+    "Anode solid diffusivity": "Negative particle diffusivity [m2.s-1]",
+    "Cathode solid diffusivity": "Positive particle diffusivity [m2.s-1]",
+    "Anode reaction rate": "Negative electrode exchange-current density [A.m-2]",
+    "Cathode reaction rate": "Positive electrode exchange-current density [A.m-2]",
+    "Electrolyte conductivity": "Electrolyte conductivity [S.m-1]",
+    "Electrolyte diffusivity": "Electrolyte diffusivity [m2.s-1]",
+    "Anode particle radius": "Negative particle radius [m]",
+    "Cathode particle radius": "Positive particle radius [m]",
+    "Anode thickness": "Negative electrode thickness [m]",
+    "Cathode thickness": "Positive electrode thickness [m]",
+}
+
+
+def scale_parameters(pv, scales: dict[str, float] | None):
+    """Multiply parameters (by PyBaMM name) by the given factors.
+
+    Works for plain values and for functions of state (e.g. a diffusivity
+    that depends on stoichiometry and temperature): a function is wrapped so
+    its output is scaled everywhere it is evaluated.
+    """
+    for name, k in (scales or {}).items():
+        if k == 1:
+            continue
+        v = pv[name]
+        pv[name] = (lambda *args, _f=v, _k=k: _k * _f(*args)) if callable(v) else v * k
+    return pv
+
+
+def _sim_parameters(chemistry: str, temperature_c: float, degradation: dict | None, scales: dict[str, float] | None = None):
     import pybamm
 
-    pv = pybamm.ParameterValues(CHEMISTRIES[chemistry][0])
+    pv = scale_parameters(pybamm.ParameterValues(CHEMISTRIES[chemistry][0]), scales)
     # Some sets (e.g. Prada2013) lack the current-collector and thermal
     # properties a lumped thermal model needs; borrow Chen2020's.
     ref = pybamm.ParameterValues("Chen2020")
@@ -204,16 +237,21 @@ def simulate_test(
     drive_minutes: float = 30.0,
     initial_soc: float | None = None,
     period_s: float = 10.0,
+    parameter_scales: dict[str, float] | None = None,
 ) -> EchemRun:
-    """Simulate one test and return all exposed internal states."""
+    """Simulate one test and return all exposed internal states.
+
+    ``parameter_scales`` multiplies material/design parameters by PyBaMM
+    name (see :data:`KNOBS`), e.g. ``{"Negative particle diffusivity [m2.s-1]": 0.1}``.
+    """
     import pybamm
 
     config = dict(
         chemistry=chemistry, test=test, c_rate=c_rate, temperature_c=temperature_c, model=model,
         thermal=thermal, degradation=dict(degradation or {}), drive=drive, drive_minutes=drive_minutes,
-        initial_soc=initial_soc, period_s=period_s,
+        initial_soc=initial_soc, period_s=period_s, parameter_scales=dict(parameter_scales or {}),
     )
-    pv, borrowed = _sim_parameters(chemistry, temperature_c, degradation)
+    pv, borrowed = _sim_parameters(chemistry, temperature_c, degradation, parameter_scales)
     vmin, vmax = pv["Lower voltage cut-off [V]"], pv["Upper voltage cut-off [V]"]
     nominal = float(pv["Nominal cell capacity [A.h]"])
     options = {"thermal": "lumped"} if thermal else {}
