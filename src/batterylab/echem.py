@@ -112,6 +112,8 @@ class EchemRun:
         deg = {k: v for k, v in c.get("degradation", {}).items() if v}
         if deg:
             bits.append(", ".join(f"{k} {v:.0%}" for k, v in deg.items()))
+        if self.meta.get("name"):  # e.g. "Test 2", set by whoever is comparing runs
+            bits.insert(0, self.meta["name"])
         return " · ".join(bits)
 
 
