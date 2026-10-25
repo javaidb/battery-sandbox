@@ -89,14 +89,14 @@ def _plant_tab(plant, measured):
     fig.add_trace(go.Scatter(x=h, y=d["temperature_c"], mode="lines", line=dict(width=2, color=c1), showlegend=False), row=4, col=1)
     fig.update_xaxes(title_text="minutes", row=4, col=1)
     fig.update_layout(hovermode="x unified")
-    st.plotly_chart(style(fig, 760), use_container_width=True)
+    st.plotly_chart(style(fig, 760), width="stretch")
 
     with st.expander("What the estimator is told up front"):
         ctx = bench.estimator_context(plant, bench.Sensors())
         st.write({k: v for k, v in ctx.items() if k != "ocv_curve"})
         oc = ctx["ocv_curve"]
         fig = go.Figure(go.Scatter(x=oc["soc"], y=oc["ocv_v"], mode="lines", line=dict(width=2, color=c1)))
-        st.plotly_chart(style(fig, 300).update_layout(title="ocv_curve (fresh cell, 25 °C)", xaxis_title="SoC", yaxis_title="OCV (V)"), use_container_width=True)
+        st.plotly_chart(style(fig, 300).update_layout(title="ocv_curve (fresh cell, 25 °C)", xaxis_title="SoC", yaxis_title="OCV (V)"), width="stretch")
 
 
 def _metrics_table(rows):
@@ -138,9 +138,9 @@ def _soc_tab(plant, scen, sens):
     fig.add_hline(y=0, line=dict(color=MUTED, width=1), row=2, col=1)
     fig.update_xaxes(title_text="minutes", row=2, col=1)
     fig.update_layout(hovermode="x unified")
-    st.plotly_chart(style(fig, 640), use_container_width=True)
+    st.plotly_chart(style(fig, 640), width="stretch")
     if rows:
-        st.dataframe(_metrics_table(rows), use_container_width=True)
+        st.dataframe(_metrics_table(rows), width="stretch")
         st.caption("'never' means the error was still outside ±2 % at the end. Results are cached; saving a workbench file re-runs them.")
     extra = [c for c in _run_est(names[0], version, scenario_key(scen), json.dumps(asdict(sens), sort_keys=True)).columns
              if c not in ("soc", "soc_std", "time_s")]
@@ -149,7 +149,7 @@ def _soc_tab(plant, scen, sens):
             est = _run_est(names[0], version, scenario_key(scen), json.dumps(asdict(sens), sort_keys=True))
             k = st.selectbox("State", extra)
             st.plotly_chart(style(go.Figure(go.Scatter(x=est["time_s"] / 60, y=est[k], mode="lines", line=dict(width=2, color=colors[0]))), 300)
-                            .update_layout(xaxis_title="minutes", yaxis_title=k), use_container_width=True)
+                            .update_layout(xaxis_title="minutes", yaxis_title=k), width="stretch")
 
 
 def _robustness_tab(scen, sens):
@@ -184,7 +184,7 @@ def _robustness_tab(scen, sens):
     metric = st.radio("Show", ["rmse_pct", "max_abs_pct", "final_abs_pct", "convergence_s"], horizontal=True)
     pivot = df.pivot(index="case", columns="estimator", values=metric)
     pivot = pivot.reindex([c for c in cases if c in pivot.index])
-    st.dataframe(pivot.style.format("{:.2f}").background_gradient(cmap="Blues", axis=None), use_container_width=True)
+    st.dataframe(pivot.style.format("{:.2f}").background_gradient(cmap="Blues", axis=None), width="stretch")
     st.download_button("Download full table (CSV)", df.to_csv(index=False).encode(), file_name="robustness.csv")
 
 
@@ -215,9 +215,9 @@ def _ecm_tab(plant):
         rows.append({"model": name, "RMSE (mV)": float(np.sqrt(np.mean(res**2))), "max |residual| (mV)": float(np.max(np.abs(res)))})
     fig.update_xaxes(title_text="minutes", row=3, col=1)
     fig.update_layout(hovermode="x unified")
-    st.plotly_chart(style(fig, 680), use_container_width=True)
+    st.plotly_chart(style(fig, 680), width="stretch")
     if rows:
-        st.dataframe(pd.DataFrame(rows).set_index("model").round(2), use_container_width=True)
+        st.dataframe(pd.DataFrame(rows).set_index("model").round(2), width="stretch")
     elif not ECMS:
         st.info("No ECMs registered yet. The plot shows the plant alone, which is still useful for looking at pulse responses: try the "
                 "'pulse train' profile and zoom in on one pulse.")
