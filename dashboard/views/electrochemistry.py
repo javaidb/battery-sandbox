@@ -15,8 +15,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from batterylab.echem import CHEMISTRIES, FIELDS, KNOBS, SERIES_GROUPS, TESTS
-from common import CRITICAL, MUTED, band_fill, categorical, metric_colors, ocp_curves, run_to_celldata, sequential_scale, simulate, style, x_axis
+from batterylab.echem import CHEMISTRIES, ELECTRODE_POTENTIALS, FIELDS, KNOBS, SERIES_GROUPS, TESTS
+from common import CRITICAL, MUTED, ROOT, band_fill, categorical, metric_colors, ocp_curves, run_to_celldata, sequential_scale, simulate, style, tab_label, tabs, x_axis
 from glossary import LOSS_KEYS, card, cards
 from views import ageing_view, measured, panels, space_time
 
@@ -107,6 +107,73 @@ def _sim_config(cfg: dict) -> dict:
     return out
 
 
+PRESET_STORE = ROOT / "dashboard" / "presets.json"
+# Starting points that ship with the dashboard, as changes from DEFAULT_TEST. Your own go in presets.json.
+BUILTIN_PRESETS = {
+    "Rate capability: 0.5C vs 1C vs 3C": [{"c_rate": 0.5}, {"c_rate": 1.0}, {"c_rate": 3.0}],
+    "Fast charge: 2C at 25 °C vs −10 °C": [{"test": "CC-CV charge", "c_rate": 2.0},
+                                           {"test": "CC-CV charge", "c_rate": 2.0, "temperature_c": -10.0}],
+    "Fresh vs LLI vs LAM_PE (10 %)": [{}, {"degradation": {"LLI": 0.1, "LAM_PE": 0.0, "LAM_NE": 0.0}},
+                                      {"degradation": {"LLI": 0.0, "LAM_PE": 0.1, "LAM_NE": 0.0}}],
+    "Chemistry: NMC811 vs LFP": [{}, {"chemistry": "LFP | graphite"}],
+}
+
+
+def _saved_presets() -> dict[str, list[dict]]:
+    try:
+        return json.loads(PRESET_STORE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _write_presets(presets: dict[str, list[dict]]) -> None:
+    PRESET_STORE.write_text(json.dumps(presets, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _load_tests(configs: list[dict]) -> None:
+    """Replace the tests with these. Fresh ids give fresh widgets, so they start from the loaded values."""
+    state = st.session_state
+    tests = []
+    for cfg in configs[:MAX_TESTS]:
+        test = json.loads(json.dumps({**DEFAULT_TEST, **cfg}))  # defaults fill any setting added since it was saved
+        test["_uid"] = state["_next_uid"]
+        state["_next_uid"] += 1
+        tests.append(test)
+    state["_tests"], state["_editing"] = tests, 0
+
+
+def _presets_sidebar(tests: list[dict]) -> None:
+    state = st.session_state
+    saved = _saved_presets()
+    # A save or delete reruns the script so the list is up to date; the new selection and message
+    # are applied here, before the selectbox exists (Streamlit forbids changing a drawn widget's value).
+    if "_preset_next" in state:
+        state["_preset_pick"] = state.pop("_preset_next")
+    if "_preset_toast" in state:
+        st.toast(state.pop("_preset_toast"))
+    with st.sidebar.expander("Presets"):
+        options = list(dict.fromkeys(list(saved) + list(BUILTIN_PRESETS)))  # yours first
+        pick = st.selectbox("Preset", options, index=None, placeholder="Choose a preset", key="_preset_pick",
+                            format_func=lambda n: n if n in saved else f"{n} (built-in)")
+        c1, c2 = st.columns(2)
+        if c1.button("Load", disabled=pick is None, width="stretch", help="Replaces the current tests"):
+            _load_tests(saved[pick] if pick in saved else BUILTIN_PRESETS[pick])
+            st.rerun()
+        if c2.button("Delete", disabled=pick not in saved, width="stretch", help="Deletes one of your saved presets"):
+            del saved[pick]
+            _write_presets(saved)
+            state["_preset_next"], state["_preset_toast"] = None, f"Deleted preset “{pick}”"
+            st.rerun()
+        name = st.text_input("Save the current tests as", placeholder="Preset name", key="_preset_name").strip()
+        if st.button("Save", disabled=not name, width="stretch",
+                     help="Saved to dashboard/presets.json. An existing preset with this name is replaced."):
+            saved[name] = [{k: v for k, v in t.items() if not k.startswith("_")} for t in tests]
+            _write_presets(saved)
+            state["_preset_next"] = name
+            state["_preset_toast"] = f"Saved preset “{name}” ({len(tests)} test{'s' if len(tests) > 1 else ''})"
+            st.rerun()
+
+
 def _tests_sidebar() -> tuple[list[dict], int]:
     """The list of tests to compare, and which one the widgets below are editing."""
     state = st.session_state
@@ -116,6 +183,7 @@ def _tests_sidebar() -> tuple[list[dict], int]:
     tests = state["_tests"]
     sb = st.sidebar
     sb.subheader("Tests")
+    _presets_sidebar(tests)
     colors = categorical(MAX_TESTS)
     names = [f"Test {k + 1}" for k in range(len(tests))]
     editing = min(state["_editing"], len(tests) - 1)
@@ -604,12 +672,43 @@ def _heat_safety(runs, colors, xmode):
                "The anode is closest to plating at the separator, where the electrolyte current is highest.")
     cards(heat + (["Total heating [W]"] if heat else []) + ["Anode potential at separator vs Li [V]"], cols=3,
           colors=categorical(3)[: len(heat)] + ([MUTED] if heat else []))
+    _electrode_potentials(run, x, xlabel)
+
+
+def _electrode_potentials(run, x, xlabel):
+    """Cathode and anode potentials vs a lithium reference, and the terminal voltage they make (one test)."""
+    s = run.series
+    cathode_c, anode_c = categorical(6)[4], categorical(6)[5]
+    volt_c = metric_colors()["voltage"]
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.62, 0.38], vertical_spacing=0.06)
+    # Top: cathode, then the terminal voltage filled up to it. The band between them is the anode potential.
+    fig.add_trace(go.Scatter(x=x, y=s["Cathode potential vs Li [V]"], mode="lines", line=dict(width=2, color=cathode_c),
+                             name="cathode vs Li"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=x, y=s["Voltage [V]"], mode="lines", line=dict(width=2, color=volt_c), fill="tonexty",
+                             fillcolor=band_fill(), name="terminal voltage = cathode − anode"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=x, y=s["Cathode OCP [V]"], mode="lines", line=dict(width=1.5, color=cathode_c, dash="dash"),
+                             name="cathode OCP"), row=1, col=1)
+    # Bottom: the anode on its own scale, where its few hundred mV are visible.
+    fig.add_trace(go.Scatter(x=x, y=s["Anode potential vs Li [V]"], mode="lines", line=dict(width=2, color=anode_c),
+                             name="anode vs Li"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x, y=s["Anode OCP [V]"], mode="lines", line=dict(width=1.5, color=anode_c, dash="dash"),
+                             name="anode OCP"), row=2, col=1)
+    fig.update_yaxes(title_text="V vs Li/Li⁺", row=1, col=1)
+    fig.update_yaxes(title_text="V vs Li/Li⁺", row=2, col=1)
+    fig.update_xaxes(title_text=xlabel, row=2, col=1)
+    st.markdown(f"**Where the terminal voltage comes from · {run.meta['name']}**")
+    st.plotly_chart(style(fig, 560).update_layout(hovermode="x unified"), width="stretch")
+    st.caption("Both electrodes are measured against a lithium reference in the middle of the separator. Shaded: the anode "
+               "potential, the gap between the cathode and the terminal voltage. Dashed: each electrode's open-circuit "
+               "potential, so the gap from solid to dashed is that electrode's share of the losses.")
+    cards(["terminal voltage", "Cathode potential vs Li [V]", "Anode potential vs Li [V]"], cols=3,
+          colors=[volt_c, cathode_c, anode_c])
 
 
 def _all_metrics(runs, colors, xmode):
     c1, c2 = st.columns(2)
-    group = c1.selectbox("Group", list(SERIES_GROUPS) + ["Safety"])
-    options = ["Anode potential at separator vs Li [V]"] if group == "Safety" else [k for k in SERIES_GROUPS[group] if k in runs[0].series]
+    group = c1.selectbox("Group", list(SERIES_GROUPS) + ["Electrode potentials"])
+    options = list(ELECTRODE_POTENTIALS) if group == "Electrode potentials" else [k for k in SERIES_GROUPS[group] if k in runs[0].series]
     lab = c2.selectbox("Metric", options)
     fig = go.Figure()
     for r, c in zip(runs, colors):
@@ -707,7 +806,7 @@ def page():
         picked = measured.pick_measured()
         if picked:
             opt, cell = picked
-            tab_data, tab_yours = st.tabs(["Data", "Your analysis (workbench)"])
+            tab_data, tab_yours = tabs(["Data", "Your analysis (workbench)"])
             with tab_data:
                 measured.render(opt, cell)
             with tab_yours:
@@ -753,9 +852,11 @@ def page():
         "Your analysis (workbench)": lambda: panels.render(run_to_celldata(run), prefixes=("A", "C", "example", "misc")),
     }
     animated = {"Inside the cell", "Inside the particles"}
-    if st.session_state.get("echem_tab") not in views:
-        st.session_state["echem_tab"] = next(iter(views))
-    active = st.session_state["echem_tab"]
+    # The tab widget stores its label (icon + name); map it back to the view name.
+    by_label = {tab_label(name): name for name in views}
+    if st.session_state.get("echem_tab") not in by_label:
+        st.session_state["echem_tab"] = next(iter(by_label))
+    active = by_label[st.session_state["echem_tab"]]
 
     main, side = st.columns([3, 1.15], gap="medium")
     with side, st.container(key="echem_side"):
@@ -775,8 +876,7 @@ def page():
 
     with main:
         # The tabs report which one is open, so only that one is drawn.
-        tabs = st.tabs(list(views), key="echem_tab", on_change="rerun")
-        for name, tab in zip(views, tabs):
+        for name, tab in zip(views, tabs(list(views), key="echem_tab", on_change="rerun")):
             if name == active:
                 with tab:
                     views[name]()
