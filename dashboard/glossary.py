@@ -232,6 +232,34 @@ GLOSSARY: dict[str, dict[str, str]] = {
         "moves": "Everything above.",
         "look": "The cell temperature follows the balance between this and the cooling.",
     },
+    # --- electrode potentials -------------------------------------------------
+    "terminal voltage": {
+        "title": "Where the terminal voltage comes from",
+        "what": "The voltage at the cell's terminals is the cathode's potential minus the anode's, both measured against the same "
+                "lithium reference. The shaded band between the cathode line and the terminal voltage is exactly the anode potential.",
+        "moves": "Anything that moves either electrode: its stoichiometry (state of charge, ageing), and the losses inside it "
+                 "(rate, temperature, diffusion, kinetics).",
+        "look": "Which electrode's curve has the features you see in the terminal voltage? A knee at the end of discharge comes from "
+                "whichever electrode runs out first. LLI and LAM change which one that is.",
+    },
+    "Cathode potential vs Li [V]": {
+        "title": "Cathode potential vs Li/Li⁺",
+        "what": "Potential of the cathode at its current collector, against a lithium reference electrode in the middle of the "
+                "separator, as a three-electrode lab cell would measure it. Dashed: its open-circuit potential at the same moment.",
+        "moves": "Cathode stoichiometry (it falls as the cathode fills with lithium on discharge), plus the cathode's own losses: "
+                 "reaction kinetics, solid diffusion, and electrolyte resistance between it and the reference.",
+        "look": "The gap between solid and dashed is the cathode's share of the voltage loss. On discharge it sits below its OCP, "
+                "on charge above.",
+    },
+    "Anode potential vs Li [V]": {
+        "title": "Anode potential vs Li/Li⁺",
+        "what": "Potential of the anode at its current collector, against the same separator reference. Dashed: its open-circuit "
+                "potential at the same moment.",
+        "moves": "Anode stoichiometry (it rises as the anode empties on discharge), plus the anode's own losses.",
+        "look": "Graphite stays low and flat for most of a discharge, so the cathode shapes most of the terminal voltage until the "
+                "anode empties and shoots up. This is the anode's potential at its current collector; the plating risk is set "
+                "by the local value at the separator, plotted alongside.",
+    },
     # --- safety ----------------------------------------------------------------
     "Anode potential at separator vs Li [V]": {
         "title": "Anode potential at the separator",
