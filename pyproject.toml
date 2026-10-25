@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "batterylab"
+version = "0.1.0"
+description = "Load battery cycler data from public datasets into tidy per-cycle and per-step tables."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "scipy"]
+
+[project.optional-dependencies]
+sim = ["pybamm"]
+biologic = ["galvani"]
+excel = ["openpyxl", "xlrd"]
+dev = ["pytest", "pybamm", "galvani", "openpyxl"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: runs a PyBaMM simulation (deselect with -m 'not slow')"]
