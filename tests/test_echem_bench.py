@@ -106,3 +106,14 @@ def test_robustness_case_builds_variants():
     assert n.current_bias_a == pytest.approx(0.05)  # 1 % of Chen2020's 5 Ah
     s, n = bench.robustness_case(bench.Scenario(), bench.Sensors(), bench.ROBUSTNESS_CASES["cold (0 °C)"])
     assert s.temperature_c == 0.0
+
+
+@pytest.mark.slow
+def test_geometry_matches_the_mesh():
+    run = echem.simulate_test(model="SPMe")
+    g = run.meta["geometry_um"]
+    # The x mesh spans anode + separator + cathode (nodes sit at cell centres, so allow one cell).
+    span = g["anode"] + g["separator"] + g["cathode"]
+    assert run.x_um["full"][-1] == pytest.approx(span, abs=span / 20)
+    assert run.x_um["n"][-1] < g["anode"] < run.x_um["p"][0]
+    assert 0 < g["anode_active_fraction"] < 1 and g["cathode_particle_radius"] > 0
