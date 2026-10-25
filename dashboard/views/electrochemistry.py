@@ -123,7 +123,7 @@ def _tests_sidebar() -> tuple[list[dict], int]:
         editing = sb.radio("Editing", range(len(tests)), index=editing, format_func=lambda k: names[k], horizontal=True)
     state["_editing"] = editing
     c1, c2 = sb.columns(2)
-    if c1.button("➕ Add test", disabled=len(tests) >= MAX_TESTS, use_container_width=True,
+    if c1.button("➕ Add test", disabled=len(tests) >= MAX_TESTS, width="stretch",
                  help=f"Adds a copy of {names[editing]}; change one setting to compare. Up to {MAX_TESTS} tests."):
         copy = json.loads(json.dumps(tests[editing]))
         copy["_uid"] = state["_next_uid"]
@@ -131,7 +131,7 @@ def _tests_sidebar() -> tuple[list[dict], int]:
         tests.append(copy)
         state["_editing"] = len(tests) - 1
         st.rerun()
-    if c2.button("✕ Remove", disabled=len(tests) == 1, use_container_width=True, help=f"Removes {names[editing]}"):
+    if c2.button("✕ Remove", disabled=len(tests) == 1, width="stretch", help=f"Removes {names[editing]}"):
         tests.pop(editing)
         state["_editing"] = max(0, editing - 1)
         st.rerun()
@@ -263,7 +263,7 @@ def _mini_response(runs, xmode, cursor: bool):
         # Legend under the plots: above them it would sit on the "Voltage (V)" title.
         fig = style(fig, 460).update_layout(legend=dict(orientation="h", x=0, y=-0.16, yanchor="top", font_size=10),
                                             margin=dict(b=40))
-        st.plotly_chart(fig, use_container_width=True, key="mini_response")
+        st.plotly_chart(fig, width="stretch", key="mini_response")
         with st.expander("What these show"):
             for col, kind, _ in RESPONSE:
                 card(col, colors[kind])
@@ -412,7 +412,7 @@ def _inside(runs, colors):
         fig.add_vrect(x0=sep["n"][-1], x1=sep["p"][0], fillcolor=MUTED, opacity=0.12, line_width=0, row=r, col=c)
     fig.update_layout(meta={"anim": True})
 
-    st.plotly_chart(_animation_controls(style(fig, 340 * (n_rows - top) + 200 * top), N_FRAMES), use_container_width=True)
+    st.plotly_chart(_animation_controls(style(fig, 340 * (n_rows - top) + 200 * top), N_FRAMES), width="stretch")
     st.caption("Drag the slider or press Play; the grey line in the Cell response panel follows along. "
                "The grey band in each plot is the **separator**: a porous polymer film that keeps the electrodes apart "
                "while electrolyte in its pores carries Li⁺. (SEI is a nanometre-thin film on the anode particles, far too thin to see here.) "
@@ -507,7 +507,7 @@ def _particles(runs, colors):
     fig.update_xaxes(title_text="radius r / R  (0 = centre, 1 = surface)", range=[0, 1], row=2, col=1)
     fig.update_layout(meta={"anim": True})
     # The rings change colour rather than position, which Plotly only shows with a full redraw.
-    st.plotly_chart(_animation_controls(style(fig, 760), N_FRAMES, redraw=True), use_container_width=True)
+    st.plotly_chart(_animation_controls(style(fig, 760), N_FRAMES, redraw=True), width="stretch")
     st.caption("Top: a slice through the particle, centre to surface, coloured by how full of lithium each shell is. "
                "Lithium enters and leaves only at the surface (the outer ring), so on discharge an anode particle empties "
                "from the outside in; solid diffusion slowly evens it out. A uniform colour means equilibrium. "
@@ -535,7 +535,7 @@ def _losses(runs, colors, xmode):
     total = (run.series["Open-circuit voltage [V]"] - run.series["Voltage [V]"]).abs() * 1000
     fig.add_trace(go.Scatter(x=x, y=total, mode="lines", line=dict(width=2, color=MUTED, dash="dot"), name="|OCV − V| (check)"))
     fig.update_layout(xaxis_title=xlabel, yaxis_title="mV")
-    st.plotly_chart(style(fig, 460), use_container_width=True)
+    st.plotly_chart(style(fig, 460), width="stretch")
     st.caption(f"{run.label}. Each band is the size of one loss mechanism; together they explain the gap between "
                "open-circuit voltage and terminal voltage. The dotted line is that gap, computed directly, as a check.")
     if len(runs) > 1:
@@ -545,7 +545,7 @@ def _losses(runs, colors, xmode):
             xr, _ = _x_axis(r, xmode)
             if lab in r.series:
                 fig.add_trace(go.Scatter(x=xr, y=r.series[lab].abs() * 1000, mode="lines", line=dict(width=2, color=c), name=r.meta["name"]))
-        st.plotly_chart(style(fig, 360).update_layout(xaxis_title=xlabel, yaxis_title=f"|{lab}| (mV)"), use_container_width=True)
+        st.plotly_chart(style(fig, 360).update_layout(xaxis_title=xlabel, yaxis_title=f"|{lab}| (mV)"), width="stretch")
     cards(["Open-circuit voltage [V]"] + [LOSS_KEYS.get(lab, lab) for lab in labels], cols=3,
           colors=[None] + categorical(6)[: len(labels)])
 
@@ -572,7 +572,7 @@ def _windows(runs, colors):
                                      marker=dict(size=10, color=["rgba(0,0,0,0)", c], line=dict(width=2, color=c))))
         fig.update_layout(xaxis_title="stoichiometry (lithium fraction)", yaxis_title="potential vs Li/Li⁺ (V)")
         col.markdown(f"**{name}**")  # a heading outside the plot, so it never collides with the legend
-        col.plotly_chart(style(fig, 420), use_container_width=True)
+        col.plotly_chart(style(fig, 420), width="stretch")
     cards(["windows", "Anode OCP [V]", "Cathode OCP [V]"], cols=3)
 
 
@@ -588,7 +588,7 @@ def _heat_safety(runs, colors, xmode):
             fig.add_trace(go.Scatter(x=x, y=run.series[lab], mode="lines", line=dict(width=2, color=color), name=lab.replace(" [W]", "")))
         fig.add_trace(go.Scatter(x=x, y=run.series["Total heating [W]"], mode="lines", line=dict(width=2, color=MUTED, dash="dot"), name="total"))
         c1.markdown(f"**Heat sources · {run.meta['name']}**")
-        c1.plotly_chart(style(fig, 420).update_layout(xaxis_title=xlabel, yaxis_title="W"), use_container_width=True)
+        c1.plotly_chart(style(fig, 420).update_layout(xaxis_title=xlabel, yaxis_title="W"), width="stretch")
     else:
         c1.info(f"{run.meta['name']} has the thermal model off; turn it on under Model and ageing to see heat sources.")
     fig = go.Figure()
@@ -599,7 +599,7 @@ def _heat_safety(runs, colors, xmode):
     if len(runs) > 1:
         c2.markdown("<div style='height:2.6rem'></div>", unsafe_allow_html=True)  # level with the test toggle on the left
     c2.markdown("**Anode potential at the separator · all tests**")
-    c2.plotly_chart(style(fig, 420).update_layout(xaxis_title=xlabel, yaxis_title="mV vs Li/Li⁺"), use_container_width=True)
+    c2.plotly_chart(style(fig, 420).update_layout(xaxis_title=xlabel, yaxis_title="mV vs Li/Li⁺"), width="stretch")
     st.caption("Reversible (entropic) heat can be negative: the cell cools while that reaction runs. "
                "The anode is closest to plating at the separator, where the electrolyte current is highest.")
     cards(heat + (["Total heating [W]"] if heat else []) + ["Anode potential at separator vs Li [V]"], cols=3,
@@ -616,10 +616,10 @@ def _all_metrics(runs, colors, xmode):
         if lab in r.series:
             xr, xlabel = _x_axis(r, xmode)
             fig.add_trace(go.Scatter(x=xr, y=r.series[lab], mode="lines", line=dict(width=2, color=c), name=r.meta["name"]))
-    st.plotly_chart(style(fig, 440).update_layout(xaxis_title=xlabel, yaxis_title=lab), use_container_width=True)
+    st.plotly_chart(style(fig, 440).update_layout(xaxis_title=xlabel, yaxis_title=lab), width="stretch")
     card(lab)
     with st.expander("Data table (current run)"):
-        st.dataframe(runs[0].series, use_container_width=True, height=300)
+        st.dataframe(runs[0].series, width="stretch", height=300)
         st.download_button("Download CSV", runs[0].series.to_csv().encode(), file_name="run.csv")
 
 
@@ -684,7 +684,7 @@ def _knobs_tab(tests, editing, runs):
         fig.update_layout(barmode="overlay", bargap=0.35)
         st.markdown(f"**Change in {metric.split(' (')[0].lower()} when each property is halved or doubled** "
                     f"(baseline {b:.4g} {metric.split('(')[-1].rstrip(')')})")
-        st.plotly_chart(style(fig, 80 + 34 * len(order)).update_layout(xaxis_title=f"change vs baseline ({unit})"), use_container_width=True)
+        st.plotly_chart(style(fig, 80 + 34 * len(order)).update_layout(xaxis_title=f"change vs baseline ({unit})"), width="stretch")
         failed = [f"{r['knob']} ×{r['factor']:g}" for r in rows if "error" in r]
         if failed:
             st.caption(f"Could not simulate: {', '.join(failed)}.")
