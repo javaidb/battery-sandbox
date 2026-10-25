@@ -81,6 +81,13 @@ def sequential_scale() -> list[list]:
     return [[i / (len(seq) - 1), c] for i, c in enumerate(seq)]
 
 
+def diverging_scale() -> list[list]:
+    """Plotly colourscale for signed values: blue (negative), neutral grey at zero, red (positive)."""
+    if _mode() == "dark":
+        return [[0, "#3987e5"], [0.5, "#383835"], [1, "#e66767"]]
+    return [[0, "#2a78d6"], [0.5, "#f0efec"], [1, "#e34948"]]
+
+
 def style(fig, height: int = 420, legend_title: str | None = None):
     fig.update_layout(
         height=height,
@@ -91,6 +98,17 @@ def style(fig, height: int = 420, legend_title: str | None = None):
     fig.update_xaxes(showgrid=True, zeroline=False)
     fig.update_yaxes(showgrid=True, zeroline=False)
     return fig
+
+
+def x_axis(run, mode: str) -> tuple[np.ndarray, str]:
+    """x values and axis label for a simulated run: test progress (%), time (h) or capacity moved (Ah)."""
+    t = run.series.index.to_numpy()
+    if mode == "Time (h)":
+        return t / 3600, "time (h)"
+    if mode == "Capacity (Ah)":
+        q = run.series["Discharge capacity [Ah]"].to_numpy()
+        return np.abs(q - q[0]), "|capacity moved| (Ah)"
+    return 100 * (t - t[0]) / max(t[-1] - t[0], 1e-9), "test progress (%)"
 
 
 def thin(df: pd.DataFrame, max_points: int = MAX_PLOT_POINTS) -> pd.DataFrame:
@@ -180,6 +198,13 @@ def rate_groups(steps: pd.DataFrame, n: int = 3) -> pd.Series:
 @st.cache_data(max_entries=16, show_spinner="Simulating…")
 def simulate(config_json: str) -> echem.EchemRun:
     return echem.simulate_test(**json.loads(config_json))
+
+
+@st.cache_data(max_entries=12, show_spinner=False)
+def simulate_ageing(config_json: str):
+    from batterylab.ageing import simulate_ageing as run
+
+    return run(**json.loads(config_json))
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
