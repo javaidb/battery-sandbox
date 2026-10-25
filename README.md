@@ -58,13 +58,29 @@ animated tab plays, a cursor on that plot follows the animation.
   profiles through the electrode stack: electrolyte concentration and
   potential, particle surface stoichiometry, interfacial current,
   overpotential.
-* *Inside the particles*: animated radial lithium profiles.
+* *Inside the particles*: an animated cross-section of each test's
+  particle, with shells coloured by lithium fraction, above the radial
+  profiles.
+* *Space–time maps*: one through-cell quantity over the whole test, as a
+  colour map of position against time. Reaction fronts, salt depletion and
+  relaxation show up as shapes.
 * *Voltage losses*: OCV − V split into particle diffusion, reaction,
   electrolyte and ohmic losses.
 * *Electrode windows*: the stretch of each electrode's OCP curve a test
   used.
 * *Heat & plating*: heat sources, and the anode potential vs Li at the
   separator (below 0 V, plating is possible).
+* *Physics knobs*: each test can scale ten material and design properties
+  in the sidebar: solid diffusivities, reaction rates, electrolyte
+  conductivity and diffusivity, particle radii, electrode thicknesses. A
+  sensitivity ranking halves and doubles each one to show which limits the
+  test.
+* *Ageing*: cycles the LG M50 cell (O'Kane 2022) with SEI growth, lithium
+  plating and particle cracking/LAM switched on. You can compare two
+  scenarios. It shows capacity fade, the lithium lost to each side
+  reaction, LAM per electrode, SEI/plating/crack growth over time (with a
+  √t axis), and discharge curves through life. An optional acceleration
+  factor scales the side-reaction rates so trends show in fewer cycles.
 * *Measured datasets* mode: the downloaded NASA/Oxford/… cells, with fade,
   V–Q curves and raw signals.
 
