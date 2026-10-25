@@ -16,7 +16,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from batterylab.echem import CHEMISTRIES, FIELDS, SERIES_GROUPS, TESTS
-from common import CRITICAL, MUTED, band_fill, categorical, metric_colors, ocp_curves, run_to_celldata, simulate, style
+from common import CRITICAL, MUTED, band_fill, categorical, metric_colors, ocp_curves, run_to_celldata, sequential_scale, simulate, style
 from glossary import LOSS_KEYS, card, cards
 from views import measured, panels
 
@@ -193,7 +193,7 @@ def _kpis(runs, colors):
     st.html(f"<style>{css}</style><table class='kpit'><thead><tr><th></th>{head}</tr></thead><tbody>{rows}</tbody></table>")
 
 
-def _animation_controls(fig, n_frames: int, bottom_px: int = 90):
+def _animation_controls(fig, n_frames: int, bottom_px: int = 90, redraw: bool = False):
     """Play/pause buttons and a progress slider under the figure."""
     pct = [f"{100 * f / (n_frames - 1):.0f} %" for f in range(n_frames)]
     fig.update_layout(
@@ -201,14 +201,14 @@ def _animation_controls(fig, n_frames: int, bottom_px: int = 90):
         updatemenus=[dict(type="buttons", direction="left", x=0, xanchor="left", y=0, yanchor="top", pad=dict(t=50, r=10),
                           showactive=False, buttons=[
             dict(label="▶ Play", method="animate",
-                 args=[None, {"frame": {"duration": 120, "redraw": False}, "fromcurrent": True, "transition": {"duration": 0}}]),
+                 args=[None, {"frame": {"duration": 120, "redraw": redraw}, "fromcurrent": True, "transition": {"duration": 0}}]),
             dict(label="⏸ Pause", method="animate", args=[[None], {"frame": {"duration": 0}, "mode": "immediate"}]),
         ])],
         sliders=[dict(active=0, x=0.16, len=0.84, xanchor="left", y=0, yanchor="top", pad=dict(t=40),
                       currentvalue=dict(prefix="test progress: ", font=dict(size=13)),
                       font=dict(color="rgba(0,0,0,0)"), ticklen=0,  # hide the 60 step labels; the current value shows above
                       steps=[dict(method="animate", label=pct[f],
-                                  args=[[str(f)], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}])
+                                  args=[[str(f)], {"frame": {"duration": 0, "redraw": redraw}, "mode": "immediate"}])
                              for f in range(n_frames)])],
     )
     return fig
@@ -293,7 +293,7 @@ _CURSOR_SYNC = """
 """
 
 
-MIN_DRAWN_RADIUS_UM = 1.5  # smaller particles are drawn enlarged, or there would be thousands of dots
+MIN_DRAWN_RADIUS_UM = 2.5  # smaller particles are drawn enlarged, or there would be thousands of dots
 
 
 def _particle_centres(x0, x1, height, r, fraction):
@@ -306,8 +306,17 @@ def _particle_centres(x0, x1, height, r, fraction):
     return centres
 
 
-def _cell_cross_section(fig, row, col, geom, chemistry, height=70.0):
-    """A to-scale cross-section of one electrode pair, sharing the µm x-axis of the plots below it."""
+def _cell_cross_section(fig, row, col, geom, chemistry, height=160.0):
+    """A to-scale cross-section of one electrode pair, sharing the µm x-axis of the plots below it.
+
+    x and y are locked to the same µm-per-pixel so particles stay round. To
+    keep x pinned to the plots' range at any screen width, only y may give:
+    the slice is drawn ``height`` µm tall (an electrode extends far in-plane)
+    and the y-axis starts from a 2 µm span around its middle (tinier spans are
+    treated as invalid and autoranged), so Plotly
+    always widens y to match x and never the other way round. The window
+    then shows however much of the slice fits the row.
+    """
     anode_name, cathode_name = (p.strip() for p in reversed(chemistry.split("|")[:2])) if "|" in chemistry else ("anode", "cathode")
     la, ls, lc = geom["anode"], geom["separator"], geom["cathode"]
     x_sep, x_cat, x_end = la, la + ls, la + ls + lc
@@ -330,8 +339,9 @@ def _cell_cross_section(fig, row, col, geom, chemistry, height=70.0):
                     ((x_cat + x_end) / 2, f"Cathode<br>{cathode_name}"), (x_end + geom["cathode_cc"] / 2, "Al")]:
         fig.add_annotation(x=x, y=1.0, xref=f"x{ax}", yref=f"y{ax} domain", text=text, showarrow=False,
                            yanchor="bottom", font=dict(size=11))
-    # Equal µm per pixel in x and y, so particles are round and to scale.
-    fig.update_yaxes(range=[0, height], visible=False, scaleanchor=f"x{ax}", scaleratio=1, constrain="domain", row=row, col=col)
+    mid = height / 2
+    fig.update_yaxes(range=[mid - 1, mid + 1], visible=False, scaleanchor=f"x{ax}", scaleratio=1,
+                     constrain="range", constraintoward="middle", row=row, col=col)
     fig.update_xaxes(range=[-geom["anode_cc"], x_end + geom["cathode_cc"]], showgrid=False, row=row, col=col)
 
 
@@ -424,32 +434,76 @@ Particle radii and layer thicknesses are the model's own parameters, drawn to th
 
 def _particles(runs, colors):
     keys = sorted({k for r in runs for k in r.particles})
-    pick = st.selectbox("Which particle", keys, format_func=lambda k: ("Anode · " if k.startswith("n") else "Cathode · ") + k.split(":")[1])
+    c1, c2 = st.columns([1, 1])
+    pick = c1.selectbox("Which particle", keys, format_func=lambda k: ("Anode · " if k.startswith("n") else "Cathode · ") + k.split(":")[1])
+    stretch = c2.radio("Colour range", ["Whole test", "This moment (shows gradients)"], horizontal=True,
+                       help="Over the whole test, the 1–2 % difference between a particle's core and surface is a barely "
+                            "visible shade. Stretching the scale to each moment's own range makes the gradient obvious.") != "Whole test"
     # Keep each test's own colour even when some tests lack this particle (SPM/SPMe have no x-resolved ones).
     pairs = [(r, c) for r, c in zip(runs, colors) if pick in r.particles]
     runs_k = [r for r, _ in pairs]
     missing = [r.meta["name"] for r in runs if pick not in r.particles]
     if missing:
         st.caption(f"Not available for {', '.join(missing)}: only the DFN model resolves particles at different depths.")
+    if not pairs:
+        return
     part = pick[0]
-    fig = go.Figure()
+    n = len(pairs)
     idxs = [_frame_idx(r) for r in runs_k]
-
-    def traces(f):
-        return [go.Scatter(x=r.r_um[part] / r.r_um[part][-1], y=r.particles[pick][:, idx[min(f, len(idx) - 1)]], mode="lines",
-                           line=dict(width=2, color=c), name=r.meta["name"]) for (r, c), idx in zip(pairs, idxs)]
-
-    for tr in traces(0):
-        fig.add_trace(tr)
-    fig.frames = [go.Frame(data=traces(f), name=str(f)) for f in range(N_FRAMES)]
     lo = min(np.nanmin(r.particles[pick]) for r in runs_k)
     hi = max(np.nanmax(r.particles[pick]) for r in runs_k)
-    fig.update_yaxes(range=[lo - 0.02, hi + 0.02], title_text="stoichiometry (lithium fraction)")
-    fig.update_xaxes(title_text="radius r / R  (0 = centre, 1 = surface)")
+
+    # Row 1: a cross-section of the particle for each test, as concentric rings
+    # coloured by lithium fraction. Row 2: the same profiles as lines.
+    radius_key = "anode_particle_radius" if part == "n" else "cathode_particle_radius"
+    titles = []
+    for r in runs_k:
+        radius = r.meta.get("geometry_um", {}).get(radius_key)
+        titles.append(f"{r.meta['name']} · R = {radius:.3g} µm" if radius else r.meta["name"])
+    fig = make_subplots(rows=2, cols=n, specs=[[{"type": "polar"}] * n, [{"colspan": n}] + [None] * (n - 1)],
+                        row_heights=[0.52, 0.48], vertical_spacing=0.14, subplot_titles=titles + [""])
+    scale = sequential_scale()
+
+    def frame_traces(f):
+        rings, lines = [], []
+        ks = [idx[min(f, len(idx) - 1)] for idx in idxs]
+        if stretch:  # one shared range per moment, so tests stay comparable with each other
+            now = np.concatenate([r.particles[pick][:, k] for r, k in zip(runs_k, ks)])
+            cmin, cmax = float(now.min()), float(now.max())
+            cmin, cmax = (cmin - 5e-4, cmax + 5e-4) if cmax - cmin < 1e-3 else (cmin, cmax)
+        else:
+            cmin, cmax = lo, hi
+        for j, ((r, c), k) in enumerate(zip(pairs, ks)):
+            rr = r.r_um[part] / r.r_um[part][-1]
+            edges = np.concatenate([[0], (rr[:-1] + rr[1:]) / 2, [1]])  # ring boundaries between mesh nodes
+            sto = r.particles[pick][:, k]
+            rings.append(go.Barpolar(
+                r=np.diff(edges), base=edges[:-1], theta=np.zeros_like(rr), width=360,
+                marker=dict(color=sto, colorscale=scale, cmin=cmin, cmax=cmax, line=dict(width=0),
+                            showscale=j == n - 1, colorbar=dict(title="Li fraction", len=0.45, y=0.78, thickness=12)),
+                hovertemplate="r/R %{base:.2f}<br>Li fraction %{marker.color:.3f}<extra>" + r.meta["name"] + "</extra>",
+                showlegend=False, subplot="polar" if j == 0 else f"polar{j + 1}"))
+            lines.append(go.Scatter(x=rr, y=sto, mode="lines", line=dict(width=2, color=c), name=r.meta["name"],
+                                    xaxis="x", yaxis="y"))
+        return rings + lines
+
+    for tr in frame_traces(0):
+        fig.add_trace(tr)
+    fig.frames = [go.Frame(data=frame_traces(f), name=str(f)) for f in range(N_FRAMES)]
+    for j in range(n):
+        fig.layout[f"polar{'' if j == 0 else j + 1}"].update(
+            radialaxis=dict(range=[0, 1], showticklabels=False, showgrid=False, ticks="", showline=False),
+            angularaxis=dict(showticklabels=False, showgrid=False, ticks="", showline=False),
+            hole=0, bargap=0)  # no gaps, so the shells read as one solid particle
+    fig.update_yaxes(range=[lo - 0.02, hi + 0.02], title_text="Li fraction (stoichiometry)", row=2, col=1)
+    fig.update_xaxes(title_text="radius r / R  (0 = centre, 1 = surface)", range=[0, 1], row=2, col=1)
     fig.update_layout(meta={"anim": True})
-    st.plotly_chart(_animation_controls(style(fig, 520), N_FRAMES), use_container_width=True)
-    st.caption("A flat profile means the particle is in equilibrium; a steep one means solid diffusion is limiting. "
-               "The surface value is what sets the electrode's potential.")
+    # The rings change colour rather than position, which Plotly only shows with a full redraw.
+    st.plotly_chart(_animation_controls(style(fig, 760), N_FRAMES, redraw=True), use_container_width=True)
+    st.caption("Top: a slice through the particle, centre to surface, coloured by how full of lithium each shell is. "
+               "Lithium enters and leaves only at the surface (the outer ring), so on discharge an anode particle empties "
+               "from the outside in; solid diffusion slowly evens it out. A uniform colour means equilibrium. "
+               "The surface value is what sets the electrode's potential. Bottom: the same profiles as lines.")
     card("particles")
 
 
