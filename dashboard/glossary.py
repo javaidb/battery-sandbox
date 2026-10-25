@@ -244,6 +244,168 @@ GLOSSARY: dict[str, dict[str, str]] = {
     },
 }
 
+# --- physics knobs (keys "knob:<label>", labels from batterylab.echem.KNOBS) ------
+_DIFFUSIVITY = {
+    "what": "How fast lithium moves through the solid active material by diffusion (D_s, m²/s). Together with the particle radius "
+            "it sets the particle's diffusion time, roughly R²/D_s.",
+    "moves": "The material itself (crystal structure, phase changes), temperature (strongly, Arrhenius), and state of charge.",
+    "look": "Lower it and the particle concentration loss grows, surfaces hit their limits early (less capacity at high C), and "
+            "GITT or pulse relaxations take longer. Raising it barely helps once another process is the bottleneck.",
+}
+_REACTION = {
+    "what": "The rate constant of the charge-transfer reaction at the particle surface, as an exchange-current density i₀. "
+            "i₀ also depends on the surface and electrolyte concentrations, so it is lowest near an empty or full electrode.",
+    "moves": "Surface chemistry and coatings, temperature (Arrhenius), and active surface area: films such as SEI and lost "
+             "active material both reduce the effective rate.",
+    "look": "Lower it and the reaction-loss band grows, and the instant voltage step at the start of a pulse gets bigger. "
+            "Raising it changes little if diffusion or transport dominates, which tells you which loss is in charge.",
+}
+_GEOMETRY_RADIUS = {
+    "what": "Size of the active particles. Diffusion time scales with R², while surface area per volume scales with 1/R.",
+    "moves": "A manufacturing and design choice: synthesis, milling, and particle cracking during ageing.",
+    "look": "Bigger particles mean slower diffusion (rate capability drops) and less surface (higher reaction loss). Smaller "
+            "particles help power but expose more surface for SEI to grow on, the classic power-versus-lifetime trade-off.",
+}
+_GEOMETRY_THICK = {
+    "what": "Thickness of the electrode coating. Capacity per unit area grows with thickness, but ions must travel further "
+            "through the pores.",
+    "moves": "A design choice: energy cells use thick electrodes, power cells thin ones. Changing one electrode also changes "
+             "how the two are balanced (the N/P capacity ratio).",
+    "look": "Thicker electrodes hold more charge at low rate but become electrolyte-transport-limited at high rate; watch the "
+            "salt deplete in the space–time map. Thin electrodes give up capacity but keep it at high C.",
+}
+GLOSSARY.update({
+    "knob:Anode solid diffusivity": {"title": "Anode solid diffusivity", **_DIFFUSIVITY},
+    "knob:Cathode solid diffusivity": {"title": "Cathode solid diffusivity", **_DIFFUSIVITY},
+    "knob:Anode reaction rate": {"title": "Anode reaction rate (exchange current)", **_REACTION},
+    "knob:Cathode reaction rate": {"title": "Cathode reaction rate (exchange current)", **_REACTION},
+    "knob:Electrolyte conductivity": {
+        "title": "Electrolyte conductivity",
+        "what": "How easily ions carry current through the liquid (κ, S/m). Inside the electrodes the effective value is lower, "
+                "because ions take winding paths through the pores (tortuosity).",
+        "moves": "Salt concentration (there is an optimum near 1 M), solvent viscosity, temperature (falls steeply when cold), "
+                 "and electrode porosity and tortuosity.",
+        "look": "Lower it and the electrolyte ohmic band grows; the instant pulse step (an ECM's R0) gets bigger. It matters most "
+                "at high C and in thick electrodes.",
+    },
+    "knob:Electrolyte diffusivity": {
+        "title": "Electrolyte diffusivity",
+        "what": "How fast salt diffuses through the liquid (D_e, m²/s). It decides whether the salt gradient that current builds "
+                "up can be smoothed out.",
+        "moves": "The electrolyte formulation, temperature, and porosity/tortuosity.",
+        "look": "Lower it at 2C and the salt runs out next to the cathode current collector: capacity collapses. This is "
+                "electrolyte-transport limitation. Watch it in the space–time map of electrolyte concentration.",
+    },
+    "knob:Anode particle radius": {"title": "Anode particle radius", **_GEOMETRY_RADIUS},
+    "knob:Cathode particle radius": {"title": "Cathode particle radius", **_GEOMETRY_RADIUS},
+    "knob:Anode thickness": {"title": "Anode thickness", **_GEOMETRY_THICK},
+    "knob:Cathode thickness": {"title": "Cathode thickness", **_GEOMETRY_THICK},
+    "sensitivity": {
+        "title": "Reading the sensitivity ranking",
+        "what": "The two bars per property show how much one metric changes when that property is halved or doubled (see the legend), with "
+                "everything else held at this test's settings.",
+        "moves": "The test you are editing: its chemistry, protocol, temperature, C-rate, model and any knobs already set.",
+        "look": "The longest bars are the processes that limit this test. Change the conditions (say, 25 °C to 0 °C) and the "
+                "ranking reshuffles: the bottleneck depends on how you use the cell. It is a one-at-a-time ranking, so it "
+                "misses interactions between properties.",
+    },
+})
+
+# --- ageing (keys "ageing:<name>") ------------------------------------------------
+GLOSSARY.update({
+    "ageing:capacity": {
+        "title": "Capacity over cycles",
+        "what": "Charge delivered by each discharge. The fall is the cell's fade: lithium lost to side reactions plus active "
+                "material that stops taking part.",
+        "moves": "Temperature, charge and discharge rates, the voltage window, and how fast each mechanism runs.",
+        "look": "A steady, slowing fade is typical of SEI. A fade that bends downward (a knee) usually means plating or LAM has "
+                "taken over. Compare a warm, gentle scenario with a cold, fast-charged one.",
+    },
+    "ageing:breakdown": {
+        "title": "Where the lithium went",
+        "what": "The model's bookkeeping of lithium consumed by each side reaction, in amp-hours: SEI on the original particle "
+                "surfaces, SEI on freshly cracked surfaces, and irreversibly plated (dead) lithium. Together these are the "
+                "loss of lithium inventory (LLI).",
+        "moves": "SEI: time at high state of charge and temperature. SEI on cracks: cycling depth and rate, through particle "
+                 "cracking. Plating: charging fast, cold or near full.",
+        "look": "Which band dominates under which conditions. LLI and LAM are separate quantities, so this chart and the LAM "
+                "chart do not add up to the capacity fade. How they combine depends on electrode balancing, which is "
+                "exactly what DVA/ICA (module A1) untangles.",
+    },
+    "ageing:lam": {
+        "title": "Loss of active material (LAM)",
+        "what": "The fraction of each electrode's host material that no longer stores lithium, here driven by stress: particles "
+                "swell and shrink as lithium enters and leaves, crack, and lose contact.",
+        "moves": "Depth and rate of cycling (bigger, faster swings mean more stress), particle size and mechanical properties.",
+        "look": "LAM does not consume lithium by itself, so early on it may cost little capacity. Once an electrode has too "
+                "little room left for the cell's lithium, capacity drops quickly: a common cause of the knee.",
+    },
+    "ageing:SEI thickness [nm]": {
+        "title": "SEI thickness",
+        "what": "The solid-electrolyte interphase: a passivating film formed when electrolyte reduces on the anode surface. It "
+                "protects the anode but consumes lithium as it grows.",
+        "moves": "Temperature (Arrhenius), anode potential (low potential, so high state of charge, is worse), and time. For "
+                 "solvent-diffusion-limited growth, thickness ∝ √time.",
+        "look": "Switch the x-axis to √time: a straight line is the diffusion-limited signature. The film also adds resistance, "
+                "which raises the reaction loss over life.",
+    },
+    "ageing:SEI on cracks thickness [nm]": {
+        "title": "SEI on cracks",
+        "what": "New SEI that grows on fresh surface exposed when particles crack. Each crack restarts the fast early stage of "
+                "SEI growth.",
+        "moves": "Cracking rate (cycling depth and rate) and the SEI growth conditions above.",
+        "look": "It can overtake the original SEI after enough cycles: mechanical and chemical ageing feeding each other.",
+    },
+    "ageing:Plated lithium thickness [nm]": {
+        "title": "Plated lithium",
+        "what": "Metallic lithium deposited on the anode surface instead of intercalating. Part of it is stripped back on "
+                "discharge (reversible); the rest is lost as dead lithium.",
+        "moves": "Anode potential falling below 0 V vs Li: fast charging, low temperature, high state of charge, thick anodes.",
+        "look": "It rises during each charge and falls on discharge; the part that does not fall is the irreversible loss. "
+                "Compare 0 °C at 2C with 25 °C at 1C.",
+    },
+    "ageing:Anode crack length [µm]": {
+        "title": "Anode crack length",
+        "what": "Average length of cracks in the anode particles, grown by cyclic stress from lithium going in and out.",
+        "moves": "Cycling depth and rate, particle size, and material toughness.",
+        "look": "Cracks create the fresh surface that SEI on cracks grows on, and drive loss of active material.",
+    },
+    "ageing:Cathode crack length [µm]": {
+        "title": "Cathode crack length",
+        "what": "Average crack length in the cathode particles. NMC secondary particles crack along grain boundaries as they "
+                "expand and contract.",
+        "moves": "Cycling depth (especially to high voltage), rate and particle design (single-crystal particles crack less).",
+        "look": "Its growth tracks cathode LAM.",
+    },
+    "ageing:Cell temperature [°C]": {
+        "title": "Cell temperature",
+        "what": "Lumped cell temperature during cycling.",
+        "moves": "Current, internal resistance, cooling, and ambient temperature.",
+        "look": "Self-heating partly offsets a cold ambient: a cold cell warms itself during fast cycles.",
+    },
+    "ageing:Voltage [V]": {
+        "title": "Voltage during cycling",
+        "what": "Terminal voltage over the whole ageing run.",
+        "moves": "Everything above. Rising resistance shows up as a bigger gap between charge and discharge.",
+        "look": "Zoom into the first and last cycles to see the curve shift.",
+    },
+    "ageing:curves": {
+        "title": "Discharge curves through life",
+        "what": "Voltage against charge delivered, for a few evenly spaced cycles (lighter = early, stronger = late).",
+        "moves": "LLI shortens the curve; LAM changes its shape; rising resistance lowers it.",
+        "look": "Where the curves part company is a fingerprint of which mechanism dominates. Reading it quantitatively is "
+                "dV/dQ and dQ/dV analysis, module A1.",
+    },
+    "ageing:acceleration": {
+        "title": "Accelerated ageing",
+        "what": "Multiplies every side-reaction rate (SEI growth, plating, cracking, LAM) so trends appear in tens of cycles "
+                "instead of hundreds.",
+        "moves": "Only the speed of each mechanism, not the physics.",
+        "look": "Use it to see shapes and compare scenarios, not to predict lifetime. Mechanisms do not all scale the same "
+                "way in reality, so set it to ×1 before drawing conclusions about which one dominates.",
+    },
+})
+
 # Voltage-breakdown labels reuse field names; map them to their loss entries.
 LOSS_KEYS = {"Reaction overpotential [V]": "Reaction overpotential [V]::loss"}
 
