@@ -15,6 +15,7 @@ from plotly.subplots import make_subplots
 
 from batterylab.echem import CHEMISTRIES, FIELDS, SERIES_GROUPS, TESTS
 from common import CRITICAL, MUTED, categorical, metric_colors, ocp_curves, run_to_celldata, simulate, style
+from glossary import LOSS_KEYS, card, cards
 from views import measured, panels
 
 MAX_PINNED = 2
@@ -170,6 +171,8 @@ def _response(runs, xmode, compact: bool = False):
         fig.update_annotations(font_size=12)
         fig.update_layout(legend=dict(font_size=10))
     st.plotly_chart(style(fig, 520 if compact else 620), use_container_width=True, key=f"response_{compact}")
+    if not compact:
+        cards([col for col, *_ in RESPONSE], cols=3, colors=[colors[kind] for _, kind, _ in RESPONSE])
 
 
 def _mini_response(runs, xmode):
@@ -244,6 +247,7 @@ def _inside(runs, colors):
     st.plotly_chart(_animation_controls(style(fig, 340 * n_rows), N_FRAMES), use_container_width=True)
     st.caption("Drag the slider or press Play. Anode on the left, separator shaded, cathode on the right. "
                "Overlaid runs are matched by % of test progress, so the same slider position is the same fraction of each test.")
+    cards(chosen)
 
 
 def _particles(runs, colors):
@@ -268,6 +272,7 @@ def _particles(runs, colors):
     st.plotly_chart(_animation_controls(style(fig, 520), N_FRAMES), use_container_width=True)
     st.caption("A flat profile means the particle is in equilibrium; a steep one means solid diffusion is limiting. "
                "The surface value is what sets the electrode's potential.")
+    card("particles")
 
 
 def _losses(runs, colors, xmode):
@@ -284,6 +289,8 @@ def _losses(runs, colors, xmode):
     st.plotly_chart(style(fig, 460), use_container_width=True)
     st.caption(f"Current run only ({run.label}). Each band is the size of one loss mechanism; together they explain the gap between "
                "open-circuit voltage and terminal voltage. The dotted line is that gap, computed directly, as a check.")
+    cards(["Open-circuit voltage [V]"] + [LOSS_KEYS.get(lab, lab) for lab in labels], cols=3,
+          colors=[None] + categorical(6)[: len(labels)])
     if len(runs) > 1:
         lab = st.selectbox("Compare one mechanism across runs", labels)
         fig = go.Figure()
@@ -316,6 +323,7 @@ def _windows(runs, colors):
                                      marker=dict(size=10, color=["rgba(0,0,0,0)", c], line=dict(width=2, color=c))))
         fig.update_layout(title=name, xaxis_title="stoichiometry (lithium fraction)", yaxis_title="potential vs Li/Li⁺ (V)")
         col.plotly_chart(style(fig, 420), use_container_width=True)
+    cards(["windows", "Anode OCP [V]", "Cathode OCP [V]"], cols=3)
 
 
 def _heat_safety(runs, colors, xmode):
@@ -339,6 +347,8 @@ def _heat_safety(runs, colors, xmode):
     c2.plotly_chart(style(fig, 420).update_layout(title="Anode potential at the separator", xaxis_title=xlabel, yaxis_title="mV vs Li/Li⁺"), use_container_width=True)
     st.caption("Reversible (entropic) heat can be negative: the cell cools while that reaction runs. "
                "The anode is closest to plating at the separator, where the electrolyte current is highest.")
+    cards(heat + (["Total heating [W]"] if heat else []) + ["Anode potential at separator vs Li [V]"], cols=3,
+          colors=categorical(3)[: len(heat)] + ([MUTED] if heat else []))
 
 
 def _all_metrics(runs, colors, xmode):
@@ -352,6 +362,7 @@ def _all_metrics(runs, colors, xmode):
             xr, xlabel = _x_axis(r, xmode)
             fig.add_trace(go.Scatter(x=xr, y=r.series[lab], mode="lines", line=dict(width=2, color=c), name=r.label))
     st.plotly_chart(style(fig, 440).update_layout(xaxis_title=xlabel, yaxis_title=lab), use_container_width=True)
+    card(lab)
     with st.expander("Data table (current run)"):
         st.dataframe(runs[0].series, use_container_width=True, height=300)
         st.download_button("Download CSV", runs[0].series.to_csv().encode(), file_name="run.csv")
