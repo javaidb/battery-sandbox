@@ -15,10 +15,10 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from batterylab.echem import CHEMISTRIES, FIELDS, SERIES_GROUPS, TESTS
-from common import CRITICAL, MUTED, band_fill, categorical, metric_colors, ocp_curves, run_to_celldata, sequential_scale, simulate, style
+from batterylab.echem import CHEMISTRIES, FIELDS, KNOBS, SERIES_GROUPS, TESTS
+from common import CRITICAL, MUTED, band_fill, categorical, metric_colors, ocp_curves, run_to_celldata, sequential_scale, simulate, style, x_axis
 from glossary import LOSS_KEYS, card, cards
-from views import measured, panels
+from views import ageing_view, measured, panels, space_time
 
 MAX_TESTS = 3  # every pair of colours stays distinguishable up to three
 N_FRAMES = 60
@@ -41,6 +41,8 @@ DEFAULT_TEST = {
     "temperature_c": 25.0, "model": "DFN", "thermal": True, "degradation": {"LLI": 0.0, "LAM_PE": 0.0, "LAM_NE": 0.0},
 }
 C_RATES = [0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
+PROPERTY_STEPS = [0.01, 0.03, 0.1, 0.3, 0.5, 1.0, 2.0, 3.0, 10.0, 30.0, 100.0]  # transport and kinetic properties span decades
+GEOMETRY_STEPS = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0]
 MODELS = ["DFN", "SPMe", "SPM"]
 # Colour identifies a test in most views; line style identifies it in the V/I/T panel.
 GLYPH = ["━━", "╍╍", "┅┅"]
@@ -80,11 +82,24 @@ def _edit_test(cfg: dict) -> None:
         deg["LLI"] = st.slider("LLI: lithium inventory lost", 0.0, 0.3, deg["LLI"], 0.01, key=f"{uid}_lli")
         deg["LAM_PE"] = st.slider("LAM_PE: cathode material lost", 0.0, 0.3, deg["LAM_PE"], 0.01, key=f"{uid}_lampe")
         deg["LAM_NE"] = st.slider("LAM_NE: anode material lost", 0.0, 0.3, deg["LAM_NE"], 0.01, key=f"{uid}_lamne")
+    scales = cfg.setdefault("scales", {})
+    # Count from the widgets' current state: the expander's label is drawn before its sliders run.
+    n_set = sum(st.session_state.get(f"{uid}_k_{p}", scales.get(p, 1.0)) != 1 for p in KNOBS.values())
+    with sb.expander(f"Material & design knobs{f' ({n_set} changed)' if n_set else ''}"):
+        st.caption("Multiply a property of the cell. See the Physics knobs tab for what each one does.")
+        for label, name in KNOBS.items():
+            options = GEOMETRY_STEPS if label.endswith(("radius", "thickness")) else PROPERTY_STEPS
+            scales[name] = st.select_slider(f"{label} ×", options, value=scales.get(name, 1.0), key=f"{uid}_k_{name}",
+                                            format_func=lambda v: f"{v:g}")
+        cfg["scales"] = {k: v for k, v in scales.items() if v != 1}
 
 
 def _sim_config(cfg: dict) -> dict:
     """The part of a test's settings the simulation uses (drops UI-only and irrelevant keys)."""
     out = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    out["parameter_scales"] = out.pop("scales", {})
+    if not out["parameter_scales"]:
+        out.pop("parameter_scales")  # keeps the cache key, and so cached runs, identical to before knobs existed
     if out["test"] != "Drive cycle":
         out.pop("drive"), out.pop("drive_minutes")
     if out["test"] not in ("CC discharge", "CC-CV charge", "Relaxation after pulse"):
@@ -131,14 +146,7 @@ def _tests_sidebar() -> tuple[list[dict], int]:
 # --- helpers ----------------------------------------------------------------
 
 
-def _x_axis(run, mode: str) -> tuple[np.ndarray, str]:
-    t = run.series.index.to_numpy()
-    if mode == "Time (h)":
-        return t / 3600, "time (h)"
-    if mode == "Capacity (Ah)":
-        q = run.series["Discharge capacity [Ah]"].to_numpy()
-        return np.abs(q - q[0]), "|capacity moved| (Ah)"
-    return 100 * (t - t[0]) / max(t[-1] - t[0], 1e-9), "test progress (%)"
+_x_axis = x_axis  # shared with the other electrochemistry views
 
 
 def _frame_idx(run, n=N_FRAMES) -> np.ndarray:
@@ -615,6 +623,78 @@ def _all_metrics(runs, colors, xmode):
         st.download_button("Download CSV", runs[0].series.to_csv().encode(), file_name="run.csv")
 
 
+SENSITIVITY_METRICS = {
+    "Capacity moved (Ah)": lambda s: abs(s["Discharge capacity [Ah]"].iloc[-1] - s["Discharge capacity [Ah]"].iloc[0]),
+    "Energy (Wh)": lambda s: abs(float(np.sum(s["Voltage [V]"] * s["Current [A]"] * np.diff(s.index.to_numpy(), prepend=s.index[0])) / 3600)),
+    "Mean polarisation |OCV − V| (mV)": lambda s: float((s["Open-circuit voltage [V]"] - s["Voltage [V]"]).abs().mean() * 1000),
+    "Min anode potential vs Li (mV)": lambda s: float(s["Anode potential at separator vs Li [V]"].min() * 1000),
+    "Peak temperature (°C)": lambda s: float(s["Cell temperature [°C]"].max()),
+}
+SENSITIVITY_FACTORS = (0.5, 2.0)
+
+
+def _knobs_tab(tests, editing, runs):
+    cfg = tests[editing]
+    name = runs[editing].meta["name"]
+    st.markdown(
+        "Each cell is a set of material and design properties. The **Material & design knobs** in the sidebar multiply "
+        f"them for the test you are editing ({name}); add a second test with one knob changed to compare them in every tab. "
+        "Below, the sensitivity ranking shows which properties limit this test."
+    )
+    set_now = {label: cfg.get("scales", {}).get(p, 1.0) for label, p in KNOBS.items() if cfg.get("scales", {}).get(p, 1.0) != 1}
+    st.caption(f"{name} knobs: " + (", ".join(f"{k} ×{v:g}" for k, v in set_now.items()) if set_now else "all at ×1 (the published cell)."))
+
+    base_cfg = _sim_config(cfg)
+    key = json.dumps(base_cfg, sort_keys=True)
+    n_sims = 2 * len(KNOBS)
+    if st.button(f"Rank sensitivities for {name} ({n_sims} simulations)", type="primary"):
+        base = runs[editing].series
+        rows, bar = [], st.progress(0.0, text="Simulating…")
+        for i, (label, param) in enumerate(KNOBS.items()):
+            for j, factor in enumerate(SENSITIVITY_FACTORS):
+                scales = {**base_cfg.get("parameter_scales", {})}
+                scales[param] = scales.get(param, 1.0) * factor
+                try:
+                    s = simulate(json.dumps({**base_cfg, "parameter_scales": scales}, sort_keys=True)).series
+                    vals = {m: f(s) for m, f in SENSITIVITY_METRICS.items()}
+                except Exception as e:  # e.g. a combination the solver cannot finish
+                    vals = {m: np.nan for m in SENSITIVITY_METRICS} | {"error": str(e)}
+                rows.append({"knob": label, "factor": factor, **vals})
+                bar.progress((2 * i + j + 1) / n_sims, text=f"{label} ×{factor:g}")
+        bar.empty()
+        st.session_state["_sensitivity"] = (key, {m: f(base) for m, f in SENSITIVITY_METRICS.items()}, rows)
+    saved = st.session_state.get("_sensitivity")
+    if saved and saved[0] == key:
+        base_vals, rows = saved[1], saved[2]
+        metric = st.radio("Metric", list(SENSITIVITY_METRICS), horizontal=True, key="sens_metric")
+        b = base_vals[metric]
+        delta = {}
+        for row in rows:
+            v = row[metric]
+            # Relative change, except for the anode potential, whose sign matters more than its size.
+            d = v - b if "anode" in metric else (100 * (v - b) / abs(b) if b else np.nan)
+            delta.setdefault(row["knob"], {})[row["factor"]] = d
+        order = sorted(delta, key=lambda k: max(abs(np.nan_to_num(x)) for x in delta[k].values()))
+        unit = "mV" if "anode" in metric else "%"
+        fig = go.Figure()
+        for factor, color in zip(SENSITIVITY_FACTORS, categorical(6)[3:5]):
+            fig.add_trace(go.Bar(y=order, x=[delta[k][factor] for k in order], orientation="h", name=f"property ×{factor:g}",
+                                 marker=dict(color=color), hovertemplate=f"%{{y}} ×{factor:g}: %{{x:+.3g}} {unit}<extra></extra>"))
+        fig.add_vline(x=0, line=dict(color=MUTED, width=1))
+        fig.update_layout(barmode="overlay", bargap=0.35)
+        st.markdown(f"**Change in {metric.split(' (')[0].lower()} when each property is halved or doubled** "
+                    f"(baseline {b:.4g} {metric.split('(')[-1].rstrip(')')})")
+        st.plotly_chart(style(fig, 80 + 34 * len(order)).update_layout(xaxis_title=f"change vs baseline ({unit})"), use_container_width=True)
+        failed = [f"{r['knob']} ×{r['factor']:g}" for r in rows if "error" in r]
+        if failed:
+            st.caption(f"Could not simulate: {', '.join(failed)}.")
+        card("sensitivity")
+    elif saved:
+        st.caption("Test settings changed since the last ranking; press the button to rerun it.")
+    with st.expander("What each knob controls", expanded=not saved):
+        cards([f"knob:{label}" for label in KNOBS])
+
+
 # --- page -------------------------------------------------------------------
 
 
@@ -663,9 +743,12 @@ def page():
     views = {
         "Inside the cell": lambda: _inside(runs, colors),
         "Inside the particles": lambda: _particles(runs, colors),
+        "Space–time maps": lambda: space_time.render(runs, colors, xmode),
         "Voltage losses": lambda: _losses(runs, colors, xmode),
         "Electrode windows": lambda: _windows(runs, colors),
         "Heat & plating": lambda: _heat_safety(runs, colors, xmode),
+        "Physics knobs": lambda: _knobs_tab(tests, editing, runs),
+        "Ageing": ageing_view.render,
         "Any metric": lambda: _all_metrics(runs, colors, xmode),
         "Your analysis (workbench)": lambda: panels.render(run_to_celldata(run), prefixes=("A", "C", "example", "misc")),
     }
