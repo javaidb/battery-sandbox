@@ -49,7 +49,9 @@ It opens at http://localhost:8501 with two views and a progress tracker.
 (NMC811, NMC532, LFP, LCO, NCA), a test (CC discharge, CC-CV charge, HPPC,
 GITT, drive cycle, relaxation) and conditions (C-rate, temperature, model,
 LLI/LAM ageing). PyBaMM re-runs and every view updates. Add up to three
-tests, each with its own settings, and every tab compares them. Plots of a
+tests, each with its own settings, and every tab compares them. Save a set
+of tests as a preset (stored in `dashboard/presets.json`) and load it later,
+or start from one of the built-in presets. Plots of a
 single quantity overlay one colour per test. Charts that already use colour
 for several mechanisms (voltage losses, heat sources) get a toggle to pick
 the test instead.
@@ -73,7 +75,9 @@ animated tab plays, a cursor on that plot follows the animation.
 * *Electrode windows*: the stretch of each electrode's OCP curve a test
   used.
 * *Heat & plating*: heat sources, and the anode potential vs Li at the
-  separator (below 0 V, plating is possible).
+  separator (below 0 V, plating is possible). Below them, the cathode and
+  anode potentials against a lithium reference in the separator, with each
+  electrode's OCP, show how the terminal voltage is cathode minus anode.
 * *Physics knobs*: each test can scale ten material and design properties
   in the sidebar: solid diffusivities, reaction rates, electrolyte
   conductivity and diffusivity, particle radii, electrode thicknesses. A
