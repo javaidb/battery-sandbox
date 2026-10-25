@@ -1,10 +1,12 @@
 """Electrochemistry view: what happens inside a cell during a test.
 
-Pick a chemistry, a test and conditions in the sidebar; the PyBaMM model
-re-runs (results are cached). Pin up to two runs to overlay them against the
-current one, then change a condition and watch what moves.
+Configure up to three tests in the sidebar (chemistry, protocol, conditions,
+ageing); each is simulated with PyBaMM and cached. Every tab compares them:
+single-quantity plots overlay one colour per test, and charts that already
+use colour for several mechanisms get a toggle to pick the test.
 """
 
+import dataclasses
 import json
 
 import numpy as np
@@ -18,7 +20,7 @@ from common import CRITICAL, MUTED, band_fill, categorical, metric_colors, ocp_c
 from glossary import LOSS_KEYS, card, cards
 from views import measured, panels
 
-MAX_PINNED = 2
+MAX_TESTS = 3  # every pair of colours stays distinguishable up to three
 N_FRAMES = 60
 
 TEST_HELP = {
@@ -34,57 +36,96 @@ TEST_HELP = {
 # --- sidebar ----------------------------------------------------------------
 
 
-def _sidebar_config() -> dict:
-    sb = st.sidebar
-    chem = sb.selectbox("Chemistry", list(CHEMISTRIES), help="PyBaMM parameter sets from the literature")
-    sb.caption(CHEMISTRIES[chem][1])
-    test = sb.selectbox("Test", TESTS)
-    cfg = {"chemistry": chem, "test": test}
-    if test in ("CC discharge", "CC-CV charge", "Relaxation after pulse"):
-        cfg["c_rate"] = sb.select_slider("C-rate", [0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0], value=1.0)
-    if test == "Drive cycle":
-        cfg["drive"] = sb.selectbox("Driving style", ["urban", "highway", "aggressive"])
-        cfg["drive_minutes"] = sb.slider("Duration (min)", 5, 60, 20, 5)
-    cfg["temperature_c"] = float(sb.slider("Ambient temperature (°C)", -10, 45, 25, 5))
+DEFAULT_TEST = {
+    "chemistry": next(iter(CHEMISTRIES)), "test": "CC discharge", "c_rate": 1.0, "drive": "urban", "drive_minutes": 20,
+    "temperature_c": 25.0, "model": "DFN", "thermal": True, "degradation": {"LLI": 0.0, "LAM_PE": 0.0, "LAM_NE": 0.0},
+}
+C_RATES = [0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
+MODELS = ["DFN", "SPMe", "SPM"]
+# Colour identifies a test in most views; line style identifies it in the V/I/T panel.
+GLYPH = ["━━", "╍╍", "┅┅"]
+
+
+def _edit_test(cfg: dict) -> None:
+    """Sidebar widgets for one test, written back into ``cfg``.
+
+    Widget keys carry the test's id, so each test keeps its own settings when
+    you switch which one you are editing.
+    """
+    sb, uid = st.sidebar, cfg["_uid"]
+    cfg["chemistry"] = sb.selectbox("Chemistry", list(CHEMISTRIES), index=list(CHEMISTRIES).index(cfg["chemistry"]),
+                                    key=f"{uid}_chem", help="PyBaMM parameter sets from the literature")
+    sb.caption(CHEMISTRIES[cfg["chemistry"]][1])
+    prev_test = cfg["test"]
+    cfg["test"] = sb.selectbox("Test", TESTS, index=TESTS.index(cfg["test"]), key=f"{uid}_test")
+    if cfg["test"] in ("CC discharge", "CC-CV charge", "Relaxation after pulse"):
+        cfg["c_rate"] = sb.select_slider("C-rate", C_RATES, value=cfg["c_rate"], key=f"{uid}_crate")
+    if cfg["test"] == "Drive cycle":
+        cfg["drive"] = sb.selectbox("Driving style", ["urban", "highway", "aggressive"],
+                                    index=["urban", "highway", "aggressive"].index(cfg["drive"]), key=f"{uid}_drive")
+        cfg["drive_minutes"] = sb.slider("Duration (min)", 5, 60, cfg["drive_minutes"], 5, key=f"{uid}_dmin")
+    cfg["temperature_c"] = float(sb.slider("Ambient temperature (°C)", -10, 45, int(cfg["temperature_c"]), 5, key=f"{uid}_temp"))
+    model_key = f"{uid}_model"
+    if cfg["test"] != prev_test:  # DFN drive cycles take 10-20 s, so switching to one picks SPMe
+        cfg["model"] = st.session_state[model_key] = "SPMe" if cfg["test"] == "Drive cycle" else "DFN"
     with sb.expander("Model and ageing"):
-        default_model = "SPMe" if test == "Drive cycle" else "DFN"
-        models = ["DFN", "SPMe", "SPM"]
         cfg["model"] = st.selectbox(
-            "Model", models, index=models.index(default_model),
+            "Model", MODELS, key=model_key,
+            **({} if model_key in st.session_state else {"index": MODELS.index(cfg["model"])}),
             help="DFN resolves every particle across the electrode; SPMe/SPM use one representative particle per electrode and are much faster.",
         )
-        cfg["thermal"] = st.checkbox("Lumped thermal model", True)
+        cfg["thermal"] = st.checkbox("Lumped thermal model", cfg["thermal"], key=f"{uid}_thermal")
         st.caption("Prescribed degradation, as fractions of the fresh cell")
-        cfg["degradation"] = {
-            "LLI": st.slider("LLI: lithium inventory lost", 0.0, 0.3, 0.0, 0.01),
-            "LAM_PE": st.slider("LAM_PE: cathode material lost", 0.0, 0.3, 0.0, 0.01),
-            "LAM_NE": st.slider("LAM_NE: anode material lost", 0.0, 0.3, 0.0, 0.01),
-        }
-    return cfg
+        deg = cfg["degradation"]
+        deg["LLI"] = st.slider("LLI: lithium inventory lost", 0.0, 0.3, deg["LLI"], 0.01, key=f"{uid}_lli")
+        deg["LAM_PE"] = st.slider("LAM_PE: cathode material lost", 0.0, 0.3, deg["LAM_PE"], 0.01, key=f"{uid}_lampe")
+        deg["LAM_NE"] = st.slider("LAM_NE: anode material lost", 0.0, 0.3, deg["LAM_NE"], 0.01, key=f"{uid}_lamne")
 
 
-def _pins(current) -> list:
-    """Sidebar controls for pinned runs. Returns [current, *pinned]."""
-    pinned = st.session_state.setdefault("_pinned", [])
+def _sim_config(cfg: dict) -> dict:
+    """The part of a test's settings the simulation uses (drops UI-only and irrelevant keys)."""
+    out = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    if out["test"] != "Drive cycle":
+        out.pop("drive"), out.pop("drive_minutes")
+    if out["test"] not in ("CC discharge", "CC-CV charge", "Relaxation after pulse"):
+        out.pop("c_rate")
+    return out
+
+
+def _tests_sidebar() -> tuple[list[dict], int]:
+    """The list of tests to compare, and which one the widgets below are editing."""
+    state = st.session_state
+    if "_tests" not in state:
+        state["_tests"] = [{**json.loads(json.dumps(DEFAULT_TEST)), "_uid": 0}]
+        state["_next_uid"], state["_editing"] = 1, 0
+    tests = state["_tests"]
     sb = st.sidebar
-    sb.divider()
-    sb.subheader("Compare runs")
-    if sb.button("📌 Pin this run", disabled=len(pinned) >= MAX_PINNED or any(p.label == current.label for p in pinned), use_container_width=True):
-        pinned.append(current)
+    sb.subheader("Tests")
+    colors = categorical(MAX_TESTS)
+    names = [f"Test {k + 1}" for k in range(len(tests))]
+    editing = min(state["_editing"], len(tests) - 1)
+    if len(tests) > 1:
+        editing = sb.radio("Editing", range(len(tests)), index=editing, format_func=lambda k: names[k], horizontal=True)
+    state["_editing"] = editing
+    c1, c2 = sb.columns(2)
+    if c1.button("➕ Add test", disabled=len(tests) >= MAX_TESTS, use_container_width=True,
+                 help=f"Adds a copy of {names[editing]}; change one setting to compare. Up to {MAX_TESTS} tests."):
+        copy = json.loads(json.dumps(tests[editing]))
+        copy["_uid"] = state["_next_uid"]
+        state["_next_uid"] += 1
+        tests.append(copy)
+        state["_editing"] = len(tests) - 1
         st.rerun()
-    colors = categorical(3)
-    # Colour identifies a run in most views; line style identifies it in the V/I/T plots.
-    glyph = ["━━", "╍╍", "┅┅"]
-    sb.markdown(f"<span style='color:{colors[0]}'>●</span> `{glyph[0]}` **current:** {current.label}", unsafe_allow_html=True)
-    for k, p in enumerate(list(pinned)):
-        c1, c2 = sb.columns([6, 1])
-        c1.markdown(f"<span style='color:{colors[k + 1]}'>●</span> `{glyph[k + 1]}` {p.label}", unsafe_allow_html=True)
-        if c2.button("✕", key=f"unpin{k}", help="Unpin"):
-            pinned.pop(k)
-            st.rerun()
-    if not pinned:
-        sb.caption(f"Pin up to {MAX_PINNED} runs, then change a setting to compare.")
-    return [current, *pinned]
+    if c2.button("✕ Remove", disabled=len(tests) == 1, use_container_width=True, help=f"Removes {names[editing]}"):
+        tests.pop(editing)
+        state["_editing"] = max(0, editing - 1)
+        st.rerun()
+    sb.markdown(
+        f"<span style='color:{colors[editing]}'>●</span> `{GLYPH[editing]}` **Editing {names[editing]}**",
+        unsafe_allow_html=True,
+    )
+    _edit_test(tests[editing])
+    return tests, editing
 
 
 # --- helpers ----------------------------------------------------------------
@@ -104,31 +145,52 @@ def _frame_idx(run, n=N_FRAMES) -> np.ndarray:
     return np.unique(np.linspace(0, len(run.t) - 1, n).round().astype(int))
 
 
-def _kpis(run):
+KPI_TIPS = {
+    "Capacity moved": "Charge passed during the test",
+    "Energy": "Delivered on discharge, absorbed on charge",
+    "Voltage range": "Lowest and highest terminal voltage",
+    "Peak temp. rise": "Above ambient",
+    "Min anode vs Li": "At the anode/separator interface; below 0 V lithium can plate",
+}
+
+
+def _kpi_values(run) -> dict[str, tuple[str, bool]]:
+    """Headline numbers for one run: label -> (formatted value, is a warning)."""
     s = run.series
     v, i = s["Voltage [V]"], s["Current [A]"]
     dt = np.diff(s.index.to_numpy(), prepend=s.index[0])
-    e_wh = float(np.sum(v * i * dt) / 3600)
     q = s["Discharge capacity [Ah]"]
     anode = s["Anode potential at separator vs Li [V]"].min()
-    items = [
-        ("Capacity moved", f"{abs(q.iloc[-1] - q.iloc[0]):.3f} Ah", f"Nominal {run.meta['nominal_capacity_ah']:g} Ah"),
-        ("Energy", f"{abs(e_wh):.2f} Wh", "Delivered on discharge, absorbed on charge"),
-        ("Voltage range", f"{v.min():.2f}–{v.max():.2f} V", f"Cut-offs {run.meta['v_min']:g}–{run.meta['v_max']:g} V"),
-        ("Peak temp. rise", f"{s['Cell temperature [°C]'].max() - run.config['temperature_c']:.1f} K", "Above ambient"),
-        ("Min anode vs Li", f"{anode * 1000:.0f} mV",
-         ("Plating possible" if anode < 0 else "No plating risk") + " (anode/separator interface; below 0 V lithium can plate)"),
-    ]
-    cells = []
-    for label, value, tip in items:
-        warn = f" style='color:{CRITICAL}'" if label.startswith("Min anode") and anode < 0 else ""
-        cells.append(f"<div title='{tip}'><div class='kpi-l'>{label}</div><div class='kpi-v'{warn}>{value}</div></div>")
-    # A compact two-column grid: st.metric truncates in a narrow side panel.
-    st.html(
-        "<style>.kpis{display:grid;grid-template-columns:1fr 1fr;gap:.5rem .75rem;margin:.25rem 0 .5rem}"
-        ".kpi-l{font-size:.75rem;opacity:.65}.kpi-v{font-size:1.05rem;font-weight:600;white-space:nowrap}</style>"
-        f"<div class='kpis'>{''.join(cells)}</div>"
+    return {
+        "Capacity moved": (f"{abs(q.iloc[-1] - q.iloc[0]):.3f} Ah", False),
+        "Energy": (f"{abs(float(np.sum(v * i * dt) / 3600)):.2f} Wh", False),
+        "Voltage range": (f"{v.min():.2f}–{v.max():.2f} V", False),
+        "Peak temp. rise": (f"{s['Cell temperature [°C]'].max() - run.config['temperature_c']:.1f} K", False),
+        "Min anode vs Li": (f"{anode * 1000:.0f} mV", anode < 0),
+    }
+
+
+def _kpis(runs, colors):
+    """Headline numbers: a two-column grid for one test, a metric × test table when comparing."""
+    vals = [_kpi_values(r) for r in runs]
+    warn = lambda w: f" style='color:{CRITICAL}'" if w else ""  # noqa: E731
+    css = (".kpis{display:grid;grid-template-columns:1fr 1fr;gap:.5rem .75rem;margin:.25rem 0 .5rem}"
+           ".kpi-l{font-size:.75rem;opacity:.65}.kpi-v{font-size:1.05rem;font-weight:600;white-space:nowrap}"
+           ".kpit{width:100%;border-collapse:collapse;font-size:.8rem;margin:.25rem 0 .5rem}"
+           ".kpit th,.kpit td{padding:.2rem .3rem;text-align:right;white-space:nowrap}"
+           ".kpit th:first-child,.kpit td:first-child{text-align:left;opacity:.7;font-weight:400}"
+           ".kpit tbody tr{border-top:1px solid rgba(128,128,128,.2)}")
+    if len(runs) == 1:
+        body = "".join(f"<div title='{KPI_TIPS[k]}'><div class='kpi-l'>{k}</div><div class='kpi-v'{warn(w)}>{v}</div></div>"
+                       for k, (v, w) in vals[0].items())
+        st.html(f"<style>{css}</style><div class='kpis'>{body}</div>")
+        return
+    head = "".join(f"<th><span style='color:{c}'>●</span> T{k + 1}</th>" for k, c in enumerate(colors))
+    rows = "".join(
+        f"<tr title='{KPI_TIPS[key]}'><td>{key}</td>" + "".join(f"<td{warn(v[key][1])}>{v[key][0]}</td>" for v in vals) + "</tr>"
+        for key in KPI_TIPS
     )
+    st.html(f"<style>{css}</style><table class='kpit'><thead><tr><th></th>{head}</tr></thead><tbody>{rows}</tbody></table>")
 
 
 def _animation_controls(fig, n_frames: int, bottom_px: int = 90):
@@ -175,11 +237,11 @@ def _mini_response(runs, xmode, cursor: bool):
         x, xlabel = _x_axis(run, xmode)
         for r, (col, kind, _) in enumerate(RESPONSE, start=1):
             fig.add_trace(go.Scatter(x=x, y=run.series[col], mode="lines", line=dict(width=2, color=colors[kind], dash=dash),
-                                     name=run.label, legendgroup=run.label, showlegend=False), row=r, col=1)
+                                     name=run.meta["name"], legendgroup=run.meta["name"], showlegend=False), row=r, col=1)
         cursor_x.append([float(x[k]) for k in _frame_idx(run)])
     if len(runs) > 1:  # legend entries for line style only, in neutral ink
         for run, dash in zip(runs, RUN_DASH):
-            fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", line=dict(width=2, color=MUTED, dash=dash), name=run.label))
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", line=dict(width=2, color=MUTED, dash=dash), name=run.meta["name"]))
     if cursor:
         for xs, dash in zip(cursor_x, RUN_DASH):
             fig.add_shape(type="line", xref="x", yref="paper", x0=xs[0], x1=xs[0], y0=0, y1=1,
@@ -190,7 +252,10 @@ def _mini_response(runs, xmode, cursor: bool):
     fig.update_annotations(font_size=12)
     with st.container(border=True):
         st.caption("Cell response" + (" · grey line = animation frame" if cursor else ""))
-        st.plotly_chart(style(fig, 430), use_container_width=True, key="mini_response")
+        # Legend under the plots: above them it would sit on the "Voltage (V)" title.
+        fig = style(fig, 460).update_layout(legend=dict(orientation="h", x=0, y=-0.16, yanchor="top", font_size=10),
+                                            margin=dict(b=40))
+        st.plotly_chart(fig, use_container_width=True, key="mini_response")
         with st.expander("What these show"):
             for col, kind, _ in RESPONSE:
                 card(col, colors[kind])
@@ -313,8 +378,8 @@ def _inside(runs, colors):
             for lab in chosen:
                 for part, arr in run.fields[lab].items():
                     out.append(go.Scatter(x=run.x_um[part], y=arr[:, k], mode="lines", line=dict(width=2, color=color),
-                                          name=run.label, legendgroup=run.label, showlegend=False,
-                                          hovertemplate=f"{lab}<br>x %{{x:.0f}} µm<br>%{{y:.4g}}<extra>{run.label}</extra>"))
+                                          name=run.meta["name"], legendgroup=run.meta["name"], showlegend=False,
+                                          hovertemplate=f"{lab}<br>x %{{x:.0f}} µm<br>%{{y:.4g}}<extra>{run.meta['name']}</extra>"))
         return out
 
     positions = [(top + 1 + j // 2, 1 + j % 2) for run in runs for j, lab in enumerate(chosen) for _ in run.fields[lab]]
@@ -360,14 +425,19 @@ Particle radii and layer thicknesses are the model's own parameters, drawn to th
 def _particles(runs, colors):
     keys = sorted({k for r in runs for k in r.particles})
     pick = st.selectbox("Which particle", keys, format_func=lambda k: ("Anode · " if k.startswith("n") else "Cathode · ") + k.split(":")[1])
-    runs_k = [r for r in runs if pick in r.particles]
+    # Keep each test's own colour even when some tests lack this particle (SPM/SPMe have no x-resolved ones).
+    pairs = [(r, c) for r, c in zip(runs, colors) if pick in r.particles]
+    runs_k = [r for r, _ in pairs]
+    missing = [r.meta["name"] for r in runs if pick not in r.particles]
+    if missing:
+        st.caption(f"Not available for {', '.join(missing)}: only the DFN model resolves particles at different depths.")
     part = pick[0]
     fig = go.Figure()
     idxs = [_frame_idx(r) for r in runs_k]
 
     def traces(f):
         return [go.Scatter(x=r.r_um[part] / r.r_um[part][-1], y=r.particles[pick][:, idx[min(f, len(idx) - 1)]], mode="lines",
-                           line=dict(width=2, color=c), name=r.label) for r, c, idx in zip(runs_k, colors, idxs)]
+                           line=dict(width=2, color=c), name=r.meta["name"]) for (r, c), idx in zip(pairs, idxs)]
 
     for tr in traces(0):
         fig.add_trace(tr)
@@ -383,8 +453,17 @@ def _particles(runs, colors):
     card("particles")
 
 
+def _test_toggle(runs, key: str):
+    """For charts with several series per test: pick which test to show (no control when there is only one)."""
+    if len(runs) == 1:
+        return runs[0]
+    k = st.segmented_control("Show test", range(len(runs)), default=0, key=key, format_func=lambda k: runs[k].meta["name"],
+                             help="This chart has one series per mechanism, so it shows one test at a time.")
+    return runs[k if k is not None else 0]
+
+
 def _losses(runs, colors, xmode):
-    run = runs[0]
+    run = _test_toggle(runs, "losses_test")
     labels = [lab for lab in SERIES_GROUPS["Voltage breakdown"] if lab != "Open-circuit voltage [V]" and lab in run.series]
     x, xlabel = _x_axis(run, xmode)
     fig = go.Figure()
@@ -395,18 +474,18 @@ def _losses(runs, colors, xmode):
     fig.add_trace(go.Scatter(x=x, y=total, mode="lines", line=dict(width=2, color=MUTED, dash="dot"), name="|OCV − V| (check)"))
     fig.update_layout(xaxis_title=xlabel, yaxis_title="mV")
     st.plotly_chart(style(fig, 460), use_container_width=True)
-    st.caption(f"Current run only ({run.label}). Each band is the size of one loss mechanism; together they explain the gap between "
+    st.caption(f"{run.label}. Each band is the size of one loss mechanism; together they explain the gap between "
                "open-circuit voltage and terminal voltage. The dotted line is that gap, computed directly, as a check.")
-    cards(["Open-circuit voltage [V]"] + [LOSS_KEYS.get(lab, lab) for lab in labels], cols=3,
-          colors=[None] + categorical(6)[: len(labels)])
     if len(runs) > 1:
-        lab = st.selectbox("Compare one mechanism across runs", labels)
+        lab = st.selectbox("Compare one mechanism across all tests", labels)
         fig = go.Figure()
         for r, c in zip(runs, colors):
             xr, _ = _x_axis(r, xmode)
             if lab in r.series:
-                fig.add_trace(go.Scatter(x=xr, y=r.series[lab].abs() * 1000, mode="lines", line=dict(width=2, color=c), name=r.label))
+                fig.add_trace(go.Scatter(x=xr, y=r.series[lab].abs() * 1000, mode="lines", line=dict(width=2, color=c), name=r.meta["name"]))
         st.plotly_chart(style(fig, 360).update_layout(xaxis_title=xlabel, yaxis_title=f"|{lab}| (mV)"), use_container_width=True)
+    cards(["Open-circuit voltage [V]"] + [LOSS_KEYS.get(lab, lab) for lab in labels], cols=3,
+          colors=[None] + categorical(6)[: len(labels)])
 
 
 def _windows(runs, colors):
@@ -421,38 +500,44 @@ def _windows(runs, colors):
             ok = ocp[key].between(-0.2, 5.0)
             fig.add_trace(go.Scatter(x=ocp["stoichiometry"][ok], y=ocp[key][ok], mode="lines", line=dict(width=2, color=MUTED),
                                      name=f"{name} OCP · {chem}"))
-        # Pinned runs first, the current run last so it is drawn on top.
+        # Later tests first, Test 1 last so it is drawn on top.
         for r, c in reversed(list(zip(runs, colors))):
             ocp = ocp_curves(r.config["chemistry"])
             sto = r.series[var].to_numpy()
             pot = np.interp(sto, ocp["stoichiometry"], ocp[key])
-            fig.add_trace(go.Scatter(x=sto, y=pot, mode="lines", line=dict(width=5, color=c), name=r.label, opacity=0.85))
+            fig.add_trace(go.Scatter(x=sto, y=pot, mode="lines", line=dict(width=5, color=c), name=r.meta["name"], opacity=0.85))
             fig.add_trace(go.Scatter(x=[sto[0], sto[-1]], y=[pot[0], pot[-1]], mode="markers", showlegend=False,
                                      marker=dict(size=10, color=["rgba(0,0,0,0)", c], line=dict(width=2, color=c))))
-        fig.update_layout(title=name, xaxis_title="stoichiometry (lithium fraction)", yaxis_title="potential vs Li/Li⁺ (V)")
+        fig.update_layout(xaxis_title="stoichiometry (lithium fraction)", yaxis_title="potential vs Li/Li⁺ (V)")
+        col.markdown(f"**{name}**")  # a heading outside the plot, so it never collides with the legend
         col.plotly_chart(style(fig, 420), use_container_width=True)
     cards(["windows", "Anode OCP [V]", "Cathode OCP [V]"], cols=3)
 
 
 def _heat_safety(runs, colors, xmode):
-    run = runs[0]
-    x, xlabel = _x_axis(run, xmode)
     c1, c2 = st.columns(2)
+    with c1:
+        run = _test_toggle(runs, "heat_test")
+    x, xlabel = _x_axis(run, xmode)
     heat = [lab for lab in SERIES_GROUPS["Heat"] if lab in run.series and lab != "Total heating [W]"]
     if heat:
         fig = go.Figure()
         for lab, color in zip(heat, categorical(3)):
             fig.add_trace(go.Scatter(x=x, y=run.series[lab], mode="lines", line=dict(width=2, color=color), name=lab.replace(" [W]", "")))
         fig.add_trace(go.Scatter(x=x, y=run.series["Total heating [W]"], mode="lines", line=dict(width=2, color=MUTED, dash="dot"), name="total"))
-        c1.plotly_chart(style(fig, 420).update_layout(title="Heat sources (current run)", xaxis_title=xlabel, yaxis_title="W"), use_container_width=True)
+        c1.markdown(f"**Heat sources · {run.meta['name']}**")
+        c1.plotly_chart(style(fig, 420).update_layout(xaxis_title=xlabel, yaxis_title="W"), use_container_width=True)
     else:
-        c1.info("Turn on the lumped thermal model to see heat sources.")
+        c1.info(f"{run.meta['name']} has the thermal model off; turn it on under Model and ageing to see heat sources.")
     fig = go.Figure()
     for r, c in zip(runs, colors):
         xr, _ = _x_axis(r, xmode)
-        fig.add_trace(go.Scatter(x=xr, y=r.series["Anode potential at separator vs Li [V]"] * 1000, mode="lines", line=dict(width=2, color=c), name=r.label))
+        fig.add_trace(go.Scatter(x=xr, y=r.series["Anode potential at separator vs Li [V]"] * 1000, mode="lines", line=dict(width=2, color=c), name=r.meta["name"]))
     fig.add_hline(y=0, line=dict(color=CRITICAL, width=1.5, dash="dash"), annotation_text="0 V: plating threshold", annotation_position="bottom right")
-    c2.plotly_chart(style(fig, 420).update_layout(title="Anode potential at the separator", xaxis_title=xlabel, yaxis_title="mV vs Li/Li⁺"), use_container_width=True)
+    if len(runs) > 1:
+        c2.markdown("<div style='height:2.6rem'></div>", unsafe_allow_html=True)  # level with the test toggle on the left
+    c2.markdown("**Anode potential at the separator · all tests**")
+    c2.plotly_chart(style(fig, 420).update_layout(xaxis_title=xlabel, yaxis_title="mV vs Li/Li⁺"), use_container_width=True)
     st.caption("Reversible (entropic) heat can be negative: the cell cools while that reaction runs. "
                "The anode is closest to plating at the separator, where the electrolyte current is highest.")
     cards(heat + (["Total heating [W]"] if heat else []) + ["Anode potential at separator vs Li [V]"], cols=3,
@@ -468,7 +553,7 @@ def _all_metrics(runs, colors, xmode):
     for r, c in zip(runs, colors):
         if lab in r.series:
             xr, xlabel = _x_axis(r, xmode)
-            fig.add_trace(go.Scatter(x=xr, y=r.series[lab], mode="lines", line=dict(width=2, color=c), name=r.label))
+            fig.add_trace(go.Scatter(x=xr, y=r.series[lab], mode="lines", line=dict(width=2, color=c), name=r.meta["name"]))
     st.plotly_chart(style(fig, 440).update_layout(xaxis_title=xlabel, yaxis_title=lab), use_container_width=True)
     card(lab)
     with st.expander("Data table (current run)"):
@@ -480,7 +565,7 @@ def _all_metrics(runs, colors, xmode):
 
 
 def page():
-    mode =st.sidebar.radio("Data", ["Simulate (PyBaMM)", "Measured datasets"], horizontal=True,
+    mode = st.sidebar.radio("Data", ["Simulate (PyBaMM)", "Measured datasets"], horizontal=True,
                             index=["Simulate (PyBaMM)", "Measured datasets"].index(st.session_state.get("_echem_mode", "Simulate (PyBaMM)")))
     st.session_state["_echem_mode"] = mode
     if mode == "Measured datasets":
@@ -495,14 +580,18 @@ def page():
                 panels.render(cell, prefixes=("A", "C", "example", "misc"))
         return
 
-    cfg = _sidebar_config()
-    try:
-        run = simulate(json.dumps(cfg, sort_keys=True))
-    except Exception as e:
-        st.error(f"The simulation failed for this combination: {e}")
-        st.stop()
-    runs = _pins(run)
+    tests, editing = _tests_sidebar()
+    runs = []
+    for k, cfg in enumerate(tests):
+        try:
+            sim = simulate(json.dumps(_sim_config(cfg), sort_keys=True))
+        except Exception as e:
+            st.error(f"Test {k + 1} failed to simulate: {e}")
+            st.stop()
+        # A shallow copy named "Test k", so legends say which test is which (the cached run is untouched).
+        runs.append(dataclasses.replace(sim, meta={**sim.meta, "name": f"Test {k + 1}"}))
     colors = categorical(len(runs))
+    run = runs[editing]
 
     # Layout: the plots get the whole left column, starting right at the top.
     # Everything else lives in a persistent panel on the right that stays in
@@ -534,11 +623,14 @@ def page():
     main, side = st.columns([3, 1.15], gap="medium")
     with side, st.container(key="echem_side"):
         st.markdown("#### Electrochemistry")
-        st.markdown(f"**{run.label}**")
-        st.caption(TEST_HELP[cfg["test"]])
-        if run.meta.get("borrowed_parameters"):
-            st.caption(f"No thermal/current-collector data in this set; {len(run.meta['borrowed_parameters'])} values borrowed from Chen2020.")
-        _kpis(run)
+        for r, c, glyph in zip(runs, colors, GLYPH):
+            st.markdown(f"<span style='color:{c}'>●</span> `{glyph}` {r.label}", unsafe_allow_html=True)
+        for test in dict.fromkeys(r.config["test"] for r in runs):
+            st.caption(f"**{test}.** {TEST_HELP[test]}")
+        borrowed = [r.meta["name"] for r in runs if r.meta.get("borrowed_parameters")]
+        if borrowed:
+            st.caption(f"{', '.join(borrowed)}: this parameter set has no thermal/current-collector data, so those values are borrowed from Chen2020.")
+        _kpis(runs, colors)
         xmode = st.radio("x-axis for time plots", ["Test progress (%)", "Time (h)", "Capacity (Ah)"], horizontal=True)
         _mini_response(runs, xmode, cursor=active in animated)
     if active in animated:
